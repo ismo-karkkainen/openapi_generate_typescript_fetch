@@ -1,0 +1,34 @@
+<%=
+Gen.output.config = Gen.x.cfg['ts_indentation']
+Gen.x.generator_info
+%>
+
+import {String2String} from './types';
+
+interface Bodyful {
+    body: string;
+}
+
+export function addJsonHeaders(body: string, headers: String2String) {
+    headers['Content-Type'] = 'application/json';
+    headers['Content-Length'] = body.length.toString();
+}
+
+export function addJsonBody(target: Bodyful, body: any, headers: String2String) {
+    if (!body)
+        return;
+    target.body = JSON.stringify(body);
+    addJsonHeaders(target['body'], headers);
+}
+
+export function str2integer(value: string|null): number|null {
+    if (value === null)
+        return null;
+    return parseInt(value);
+}
+
+export function str2float(value: string|null): number|null {
+    if (value === null)
+        return null;
+    return parseFloat(value);
+}

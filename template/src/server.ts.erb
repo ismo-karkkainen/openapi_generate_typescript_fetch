@@ -1,0 +1,239 @@
+<%=
+Gen.output.config = Gen.x.cfg['ts_indentation']
+Gen.x.generator_info
+%>
+<%=
+out = []
+# Has any server at top level?
+# Default to server with '/' path.
+servers = Gen.doc['servers'] || []
+top = OpenAPISourceTools::ApiObjects::ServerAlternatives.new(servers)
+Gen.doc[:servers] = top
+Gen.doc[:servers].set_id = 0
+overrides = []
+opIds = []
+opId2group = {}
+group2opIds = {}
+Gen.doc['paths'].each do |path, path_item|
+  servers = path_item['servers']
+  if servers.nil?
+    srvs = top
+  else
+    # If servers is exactly as at top level, this keeps it in separate group.
+    # Either servers array is an error or intentional. 
+    srvs = OpenAPISourceTools::ApiObjects::ServerAlternatives.new(servers)
+    idx = overrides.index(srvs)
+    if idx.nil?
+      overrides.push(srvs)
+      srvs.set_id = overrides.size
+    else
+      srvs = overrides[index]
+    end
+    warn("Servers at path #{path} are identical to top level.") if top == srvs
+  end
+  path_item[:servers] = srvs
+  oos = OpenAPISourceTools::ApiObjects.operation_objects(path_item).values
+  oos.each do |oo|
+    oid = oo['operationId']
+    next if oid.nil?
+    opIds.push(oid)
+    opId2group[oid] = srvs
+    group2opIds[srvs.set_id] = group2opIds.fetch(srvs.set_id, []).push(oid)
+  end
+end
+
+# Make server variable types, var name to string but names vary.
+# ServerObject matches arguments type, function to use SVO checkers and make URL.
+svos = []
+svo2data = {}.compare_by_identity
+svo2checker = {}.compare_by_identity
+sos = []
+so2data = {}.compare_by_identity
+so2checker = {}.compare_by_identity
+consts = Set.new
+[ top ].concat(overrides).each do |sa|
+  sa.servers.each do |so|
+    index = sos.index(so)
+    if index.nil?
+      sos.push(so)
+      so2data[so] = so
+      index = sos.size
+    else
+      so2data[so] = sos[index]
+    end
+    so2checker[so] = "serverUrl#{index}" # Figure out a better name, probably exported.
+    so.variables.each do |svo|
+      consts.add(svo.default)
+      svo.enum.each { |e| consts.add(e) }
+      index = svos.index { |x| x.default == svo.default && x.enum == svo.enum }
+      if index.nil?
+        index = svos.size
+        svos.push(svo)
+        svo2data[svo] = svo
+        svo2data[svo] = svos[index]
+      end
+      svo2checker[svo] = "serverVariable#{index}"
+    end
+  end
+end
+
+value2const = {}
+consts.to_a.sort!.each do |s|
+  value2const[s] = "srvVarConst#{value2const.size}"
+  out.push("const #{value2const[s]} = '#{s}';")
+end
+
+# Behind the scenes a mapping from operationId to server URL string?
+Gen.output.join(out)
+%>
+
+// String constants matching each operationId.
+enum OperationIdNames {
+<%= opIds.map { |id| "#{id} = '#{id}'" }.join(",\n") %>
+}
+
+export enum OperationIdIndex {
+<%= opIds.join(",\n") %>
+}
+
+<%= opIds.map { |id| "export const #{id}Url = { url: '' };" }.join("\n") %>
+
+export const operationIdUrls = [
+<%= opIds.map { |id| "  #{id}Url" }.join(",\n") %>
+];
+
+// For use when same server is set for all.
+const allOperationIds = [
+<%= opIds.map { |id| "  OperationIdIndex.#{id}" }.join(",\n") %>
+];
+
+// For use when server is set to every operationId in group.
+const operationIdsByGroupIndex = [
+<%=
+  group2opIds.keys.sort!.map do |gid|
+    "  [ #{group2opIds[gid].sort!.map { |id| "OperationIdIndex.#{id}" }.join(', ')} ]"
+  end.join(",\n")
+%>
+];
+
+// For use when server is set to everything in group by operationId.
+const groupIndexByOperationId = [
+<%= opIds.map { |oid| "  #{opId2group[oid].set_id}" }.join(",\n") %>
+];
+
+<%=
+out = [ '// Server variable enum constants.' ]
+enums2const = {}
+svos.each do |svo|
+  next if svo.enum.empty?
+  key = svo.enum.join(', ')
+  unless enums2const.key?(key)
+    name = "srvVarEnumsConst#{enums2const.size}"
+    c = "const #{name} = [ #{svo.enum.map { |e| value2const[e] }.join(', ')} ];"
+    enums2const[key] = name
+    out.push(c)
+  end
+end
+out = [ '// No server variable enum constants.' ] if out.size == 1
+Gen.output.join(out)
+%>
+<%=
+out = [ '// Server variable value check functions.' ]
+svos.each do |svo|
+  if svo.enum.empty?
+    s = <<EOB
+function #{svo2checker[svo]}(value: string|undefined): string {
+  return (value === undefined) ? #{value2const[svo.default]} : value;
+}
+EOB
+  else
+    key = svo.enum.join(', ')
+    s = <<EOB
+function #{svo2checker[svo]}(value: string|undefined): string {
+  if (value === undefined) {
+    return #{value2const[svo.default]};
+  }
+  if (#{enums2const[key]}.includes(value)) {
+    return value;
+  }
+  throw new Error(`Invalid value for server variable: ${value}`);
+}
+EOB
+  end
+  out.push(s)
+end
+out = [ '// No server variable value check functions.' ] if out.size == 1
+Gen.output.join(out)
+%>
+<%=
+out = [ '// Server URL assign argument types and functions.']
+sos.each do |so|
+  if so.variables.empty?
+    out.push("// No URL function for #{so.url}, no variables.")
+    next
+  end
+  iname = "Args#{LuckyCase.pascal_case(so2checker[so])}"
+  s = <<EOB
+export interface #{iname} {
+  #{so.variables.map { |v| "#{v.name}: string;" }.join("\n  ")}
+}
+
+export function #{so2checker[so]}(args: #{iname}): string {
+  #{so.variables.map { |v| "const #{v.name} = encodeURIComponent(#{svo2checker[v]}(args.#{v.name}));" }.join("\n  ")}
+  return `#{so.url.gsub('{', '${')}`;
+}
+
+EOB
+  out.push(s)
+end
+out = [ '// No server URL compose argument types or functions.'] if out.size == 1
+Gen.output.join(out)
+%>
+
+export function setAllServerUrls(url: string): void {
+  while (url.endsWith('/')) url = url.slice(0, url.length - 2);
+  for (const x of operationIdUrls) {
+    x.url = url;
+  }
+}
+
+export enum AssignmentCover {
+  Operation,
+  Group,
+  All
+}
+
+export function setServerUrl(url: string, operationId: OperationIdIndex, cover: AssignmentCover): void {
+  while (url.endsWith('/')) url = url.slice(0, url.length - 2);
+  switch (cover) {
+    case AssignmentCover.Operation:
+      operationIdUrls[operationId].url = url;
+      break;
+    case AssignmentCover.Group:
+      for (const k of operationIdsByGroupIndex[groupIndexByOperationId[operationId]]) {
+        operationIdUrls[k].url = url;
+      };
+      break;
+    case AssignmentCover.All:
+      setAllServerUrls(url);
+      break;
+    default:
+      throw new Error(`Unhandled AssignmentCover value: ${cover}`)
+      break;
+  }
+}
+
+export function operationIdIndex(id: string): OperationIdIndex|null {
+  switch (id) {
+<%= opIds.map { |id| "case OperationIdNames.#{id}: return OperationIdIndex.#{id};" }.join("\n") %>
+  }
+  return null;
+}
+
+// Possible to add server name assignment with better name?
+// A fixed name would be something in the URL.
+// For now the server name in the return line is the only reasonable clue.
+
+// Add server string assignment function with operationId and cover.
+// Perhaps can make do without generated code, just uses the maps and arrays
+// already defined.

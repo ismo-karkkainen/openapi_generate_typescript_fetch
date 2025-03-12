@@ -1,0 +1,106 @@
+#!/bin/sh
+
+<%= Gen.x.generator_info.gsub(/^\/\//, '#') %>
+
+D=$(dirname $0)
+test -n "$D" && cd "$D" # There should be something in D.
+
+cat > package.json <<EOF
+<%=
+require 'json'
+# Default package.json. You should provide your own.
+dpj = <<EOB
+{
+  "name": "NAME",
+  "version": "0.0.0",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "test": "echo 'Error: no test specified' && exit 1"
+  },
+  "author": "AUTHOR",
+  "license": "LICENSE",
+  "description": "DESCRIPTION"
+}
+EOB
+begin
+  pj = JSON.parse(Gen.x.cfg['package'] || dpj)
+rescue StandardError => e
+  raise StandardError, "#{OpenAPISourceToolsFetchTypescript::NAME}: Error parsing package.json: #{e.message}"
+end
+# Get all packages from dependencies and dev depedencies and make Hashes.
+Gen.t.x = {
+  dependencies: pj['dependencies'] || {},
+  devDependencies: pj['devDependencies'] || {}
+}
+pj.delete('dependencies')
+pj.delete('devDependencies')
+JSON.generate(pj, {
+  array_nl: "\n",
+  object_nl: "\n",
+  indent: '  ',
+  space: ' '
+})
+%>
+EOF
+
+npm install --save-dev <%=
+# Add dependencies needed by the code produced by the template.
+%w[c8 mocha chai typescript].each do |name|
+  next if Gen.t.x[:devDependencies].key?(name)
+  Gen.t.x[:devDependencies][name] = ''
+end
+out = []
+Gen.t.x[:devDependencies].each do |name, ver|
+  out.push("#{name}#{ver.empty? ? '' : ('@' + ver)}")
+end
+out.join(' ')
+%>
+<%=
+out = [ 'npm install --save' ]
+Gen.t.x[:dependencies].each do |name, ver|
+  out.push("#{name}#{ver.empty? ? '' : ('@' + ver)}")
+end
+out.size > 1 ? out.join(' ') : '# No run-time dependencies.'
+%>
+
+cat > tsconfig.json <<EOF
+<%=
+# Default tsconfig.json. You should provide your own.
+dtsc = '{
+  "compilerOptions": {
+    "target": "es2016",
+    "lib": ["es2016", "dom"],
+    "module": "es2015",
+    "declaration": true,
+    "rootDir": "src",
+    "allowJs": false,
+    "outDir": "./build",
+    "noEmit": false,
+    "esModuleInterop": true,
+    "noImplicitAny": true,
+    "moduleResolution": "bundler",
+    "forceConsistentCasingInFileNames": true,
+    "strict": true,
+    "skipLibCheck": false
+  },
+  "include": [
+    "src"
+  ]
+}'
+begin
+  tsc = JSON.parse(Gen.x.cfg['tsconfig'] || dtsc)
+rescue StandardError => e
+  raise StandardError, "#{OpenAPISourceToolsFetchTypescript::NAME}: Error parsing tsconfig.json: #{e.message}"
+end
+JSON.generate(tsc, {
+  array_nl: "\n",
+  object_nl: "\n",
+  indent: '  ',
+  space: ' '
+})
+%>
+EOF
+
+# Point is to get build to contain js and d.ts files so ts projects can use it.
+# Hence build before publish.
