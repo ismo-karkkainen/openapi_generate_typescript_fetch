@@ -1,0 +1,844 @@
+<%=
+Gen.output.config = Gen.x.cfg['ts_indentation']
+Gen.x.generator_info
+%>
+
+import {expect} from 'chai';
+import type {CallExtras, String2String, EncodedBodyType, EncoderFunction, <%= Gen.x.schemas.import_types.join(', ') %>} from '../src/schemas.d.ts';
+import {<%= Gen.x.schemas.imports.join(', ') %>} from '../src/schemas.js';
+import type {UrlRequestInit, RequestInitModifier, PrepareArgs, <%= Gen.x.callclasses.import_types.join(', ') %>} from '../src/callclasses.d.ts';
+import {isUrlRequestInit, RequestError, ResponseError, <%= Gen.x.callclasses.imports.join(', ') %>} from '../src/callclasses.js';
+import {<%= Gen.x.makers.functions.sort.join(', ') %>} from './makers.js';
+import { shared } from '../src/shared.js';
+
+
+describe('Not generated', function () {
+  describe('isUrlRequestInit', function () {
+    it('valids pass', function () {
+      expect(isUrlRequestInit({ url: 'any', ri: {}})).to.be.true;
+      expect(isUrlRequestInit({ url: 'https://example.com', ri: { any: 'object' }})).to.be.true;
+    })
+    it('invalids', function () {
+      expect(isUrlRequestInit(null)).to.be.false;
+      expect(isUrlRequestInit({})).to.be.false;
+      expect(isUrlRequestInit({ notUrl: 'string', any: {} })).to.be.false;
+      expect(isUrlRequestInit({ url: 345, ri: {} })).to.be.false;
+      expect(isUrlRequestInit({ url: 'https://valid.looking', ri: 'invalid' })).to.be.false;
+      expect(isUrlRequestInit(3)).to.be.false;
+      expect(isUrlRequestInit('invalid')).to.be.false;
+      expect(isUrlRequestInit(true)).to.be.false;
+    })
+  })
+})
+
+// Caller class tests.
+
+<%=
+out = []
+Gen.doc['paths'].each do |path, path_item_object|
+  oos = OpenAPISourceTools::ApiObjects.operation_objects(path_item_object)
+  oos.each do |method, operation_object|
+    oid = operation_object['operationId']
+    next if oid.nil?
+    clsName = operation_object[:name]
+    clsRespName = operation_object[:resp_name]
+    clsReqError = operation_object[:req_error]
+    paramless = operation_object[:parameterless]
+    req = operation_object[:request]
+    has_encoder = req[:has_encoder]
+    paraschemas = operation_object[:paraschemas]
+    out.push("describe('#{oid} #{clsName}', function () {")
+    s = <<EOB
+    it('setExtras headers', function () {
+        const x: CallExtras = {
+            headers: { arbitrary: 'stringvalue' }
+        };
+        const r: #{clsName} = new #{clsName}();
+        expect(Object.is(r, r.setExtras(x))).to.be.true;
+        expect(r.extras).to.deep.equal(x);
+        const x2: CallExtras = {
+            headers: { secondary: 'valuestring' }
+        };
+        expect(Object.is(r, r.setExtras(x2))).to.be.true;
+        expect(r.extras).to.have.property('headers');
+        expect(r.extras!.headers).to.have.property('arbitrary', x.headers!.arbitrary);
+        expect(r.extras!.headers).to.have.property('secondary', x2.headers!.secondary);
+    });
+    it('setExtras query', function () {
+        const x: CallExtras = {
+            query: { arbitrary: 'stringvalue' }
+        };
+        const r: #{clsName} = new #{clsName}();
+        expect(Object.is(r, r.setExtras(x))).to.be.true;
+        expect(r.extras).to.deep.equal(x);
+        const x2: CallExtras = {
+            query: { secondary: 'valuestring' }
+        };
+        expect(Object.is(r, r.setExtras(x2))).to.be.true;
+        expect(r.extras).to.have.property('query');
+        expect(r.extras!.query).to.have.property('arbitrary', x.query!.arbitrary);
+        expect(r.extras!.query).to.have.property('secondary', x2.query!.secondary);
+    });
+    it('setExtras headers and query', function () {
+        const x: CallExtras = {
+            headers: { arbitrary: 'stringvalue' },
+            query: { param: 'value' }
+        };
+        const r: #{clsName} = new #{clsName}();
+        expect(Object.is(r, r.setExtras(x))).to.be.true;
+        expect(r.extras).to.deep.equal(x);
+        const x2: CallExtras = {
+            headers: { secondary: 'valuestring' },
+            query: { other: 'string' }
+        };
+        expect(Object.is(r, r.setExtras(x2))).to.be.true;
+        expect(r.extras).to.have.property('headers');
+        expect(r.extras!.headers).to.have.property('arbitrary', x.headers!.arbitrary);
+        expect(r.extras!.headers).to.have.property('secondary', x2.headers!.secondary);
+        expect(r.extras).to.have.property('query');
+        expect(r.extras!.query).to.have.property('param', x.query!.param);
+        expect(r.extras!.query).to.have.property('other', x2.query!.other);
+    });
+    it('setModifier', function () {
+        const modder = (ur: UrlRequestInit) => {};
+        const r: #{clsName} = new #{clsName}();
+        expect(r.modifier).to.be.undefined;
+        expect(Object.is(r, r.setModifier(modder))).to.be.true;
+        expect(r.modifier).to.equal(modder);
+    });
+    it('setServerUrl', function () {
+        const su = 'serverurl';
+        const r: #{clsName} = new #{clsName}();
+        expect(r.serverUrl).to.be.undefined;
+        expect(Object.is(r, r.setServerUrl(su))).to.be.true;
+        expect(r.serverUrl).to.equal(su);
+    });
+EOB
+    out.push(s)
+    if has_encoder
+      s = <<EOB
+    it('setEncoder', function () {
+        const enc = (body: any): [EncodedBodyType, string, number, String2String] => { return ['encodedBody', 'somevalue', 10, {} as String2String]; }
+        const r: #{clsName} = new #{clsName}();
+        expect(r.encoder).to.be.undefined;
+        expect(Object.is(r, r.setEncoder(enc))).to.be.true;
+        expect(r.encoder).to.equal(enc);
+    });
+EOB
+      out.push(s)
+    end
+    if paramless
+      [ 'instance', clsName, 'shared' ].each do |source|
+        [ true, false ].each do |signalable|
+          [ true, false ].each do |create|
+            [ true, false ].each do |precreate|
+              s = <<EOB
+    it('#{signalable ? 'A' : 'Not a'}bort signalable via #{source}, #{create ? '' : 'do not '}create signal#{precreate ? ', added before' : ''}', function () {
+        const instance: #{clsName} = new #{clsName}();
+        #{precreate ? '' : '// '}instance.abortController = new AbortController();
+        #{clsName}.abortSignalable = undefined;
+        #{source}.abortSignalable = #{signalable};
+        const p: UrlRequestInit = instance.prepare(#{create ? '{ createAbortSignal: true }' : ''});
+        shared.abortSignalable = false;
+        expect(isUrlRequestInit(p)).to.be.true;
+        expect(Object.is(instance.urlRequestInit, p)).to.be.true;
+        expect(instance.abortController).#{signalable || create || precreate ? 'not.' : ''}to.be.null;
+        #{signalable || create || precreate ? '' : '// '}expect(Object.is(p.ri.signal, instance.abortController!.signal)).to.be.true;
+        #{signalable || create || precreate ? '// ' : ''}expect(p.ri.signal).to.be.undefined;
+    });
+EOB
+              out.push(s)
+            end
+          end
+        end
+        red = (source == 'instance') ? 'error' : 'manual'
+        s = <<EOB
+    it('Modifier via #{source}', function () {
+        const modder = (ur: UrlRequestInit) => { ur.ri.redirect = '#{red}'; };
+        const instance: #{clsName} = new #{clsName}();
+        #{source}.#{source == 'instance' ? 'setModifier(modder)' : 'modifier = modder'};
+        const p: UrlRequestInit = instance.prepare();
+        shared.modifier = null;
+        expect(isUrlRequestInit(p)).to.be.true;
+        expect(Object.is(instance.urlRequestInit, p)).to.be.true;
+        expect(p.ri).to.have.property('redirect', '#{red}');
+    });
+EOB
+        out.push(s)
+        ident = 'a'
+        value = 'b'
+        s = <<EOB
+    it('Extra query parameter via #{source}', function () {
+        const xt: CallExtras = { query: { #{ident}: '#{value}' }};
+        const instance: #{clsName} = new #{clsName}();
+        #{source}.#{source == 'instance' ? 'setExtras(xt)' : 'extras = xt'};
+        const p: UrlRequestInit = instance.prepare();
+        #{clsName}.extras = {};
+        shared.extras = {};
+        expect(p.url.endsWith(`${encodeURIComponent('#{ident}')}=${encodeURIComponent('#{value}')}`)).to.be.true;
+    });
+EOB
+        out.push(s)
+      end
+    else
+      param_info = paraschemas.map do |ps|
+        {
+          name: ps[:param][:name],
+          in: ps[:param]['in'], # Where to look from: path, query, header.
+          schema: ps[:schema],
+          required: ps[:param].fetch('required', false),
+          maker: ps[:schema][:pass].first
+        }
+      end
+      s = <<EOB
+    it('Missing parameters', function () {
+        const r: #{clsName} = new #{clsName}();
+        expect(() => r.prepare()).to.throw(#{clsReqError}, 'parameters do not conform');
+    });
+EOB
+      out.push(s)
+      expects = param_info.select { |p| p[:required] }.map do |pi|
+        case pi[:in]
+        when 'path' then "if (params.#{pi[:name]} !== undefined) expect(p.url.includes(params.#{pi[:name]})).to.be.true;"
+        when 'query' then "if (params.#{pi[:name]} !== undefined) expect(p.url.includes(`${encodeURIComponent(#{pi[:name]})}=${encodeURIComponent(params.#{pi[:name]})}`)).to.be.true;"
+        when 'header' then "if (params.#{pi[:name]} !== undefined) expect((p.ri.headers! as Headers).get('#{pi[:name]}')).to.equal(params.#{pi[:name]});"
+        else
+          "// #{clsName} parameter #{pi[:name]} located in #{pi[:in]} not tested."
+        end
+      end
+      # Loop over all pass functions.
+      operation_object[:pass].each do |fn|
+        s = <<EOB
+    it('Pass using #{fn}', function () {
+        const params: #{operation_object[:args_name]} = #{fn}();
+        const r: #{clsName} = new #{clsName}(params);
+        const p: UrlRequestInit = r.prepare();
+        expect(isUrlRequestInit(p)).to.be.true;
+        expect(Object.is(r.urlRequestInit, p)).to.be.true;
+        #{expects.compact.join("\n")}
+        const keys = Object.keys(params);
+        if (!keys.includes('encoded')) {
+            const others = keys.filter((name: string): boolean => name.startsWith('body') && name != 'body');
+            if (keys.includes('body')) {
+                expect(p.ri).to.have.property('body');
+                const pr: object = params as object;
+                for (const other of others)
+                    expect(Object.is(pr['body' as keyof object], pr[other as keyof object])).to.be.true;
+            } else if (0 < others.length) {
+                expect(others).to.have.lengthOf(1);
+                expect(p.ri).to.have.property('body');
+            }
+        } else {
+            expect(p.ri).to.have.property('body');
+        }
+    });
+EOB
+        out.push(s)
+      end
+      fn = operation_object[:pass].first
+      unless fn.nil?
+        [ true, false ].each do |signalable|
+          [ true, false ].each do |create|
+            [ true, false ].each do |precreate|
+              [ 'instance', clsName, 'shared' ].each do |source|
+                s = <<EOB
+    it('#{signalable ? 'A' : 'Not a'}bort signalable via #{source}, #{create ? '' : 'do not '}create signal#{precreate ? ', added before' : ''}', function () {
+        const params: #{operation_object[:args_name]} = #{fn}();
+        const instance: #{clsName} = new #{clsName}(params);
+        #{precreate ? '' : '// '}instance.abortController = new AbortController();
+        #{source}.abortSignalable = #{signalable};
+        const p: UrlRequestInit = instance.prepare({ createAbortSignal: #{create} });
+        shared.abortSignalable = false;
+        expect(isUrlRequestInit(p)).to.be.true;
+        expect(Object.is(instance.urlRequestInit, p)).to.be.true;
+        #{expects.compact.join("\n")}
+        expect(instance.abortController).#{signalable || create || precreate ? 'not.' : ''}to.be.null;
+        #{signalable || create || precreate ? '' : '// '}expect(Object.is(p.ri.signal, instance.abortController!.signal)).to.be.true;
+        #{signalable || create || precreate ? '// ' : ''}expect(p.ri.signal).to.be.undefined;
+    });
+EOB
+                out.push(s)
+              end
+            end
+          end
+        end
+        [ 'instance', clsName, 'shared' ].each do |source|
+          red = (source == 'instance') ? 'error' : 'manual'
+          s = <<EOB
+    it('Modifier via #{source}', function () {
+        const modder = (ur: UrlRequestInit) => { ur.ri.redirect = '#{red}'; };
+        const params: #{operation_object[:args_name]} = #{fn}();
+        const instance: #{clsName} = new #{clsName}(params);
+        #{source}.#{source == 'instance' ? 'setModifier(modder)' : 'modifier = modder'};
+        const p: UrlRequestInit = instance.prepare();
+        shared.modifier = null;
+        expect(isUrlRequestInit(p)).to.be.true;
+        expect(Object.is(instance.urlRequestInit, p)).to.be.true;
+        expect(p.ri).to.have.property('redirect', '#{red}');
+    });
+EOB
+          out.push(s)
+        end
+        count = param_info.select { |p| p[:in] == 'query' }.map { |p| p[:name].size }.max || 1
+        ident = 'a' * (count + 1)
+        value = 'b' * (count + 1)
+        [ 'instance', clsName, 'shared' ].each do |source|
+          s = <<EOB
+    it('Extra query parameter via #{source}', function () {
+        const xt: CallExtras = { query: { #{ident}: '#{value}' }};
+        const params: #{operation_object[:args_name]} = #{fn}();
+        const instance: #{clsName} = new #{clsName}(params);
+        #{source}.#{source == 'instance' ? 'setExtras(xt)' : 'extras = xt'};
+        const p: UrlRequestInit = instance.prepare();
+        shared.extras = {};
+        expect(p.url.includes(`${encodeURIComponent('#{ident}')}=${encodeURIComponent('#{value}')}`)).to.be.true;
+    });
+EOB
+          out.push(s)
+        end
+        if has_encoder
+          s = <<EOB
+    it('No encoder', function () {
+        const params: #{operation_object[:args_name]} = #{fn}();
+        const r: #{clsName} = new #{clsName}(params);
+        const enc = #{clsName}.encoder;
+        #{clsName}.encoder = null;
+        shared.encoder = null;
+        expect(() => r.prepare()).to.throw(#{clsReqError}, 'no request body encoder');
+        #{clsName}.encoder = enc;
+    });
+EOB
+          out.push(s)
+          [ 'instance', clsName, 'shared' ].each do |source|
+            s = <<EOB
+    it('Encoder via #{source}', function () {
+        const encBody = JSON.stringify('body from #{source} encoder');
+        const enc = (body: any): [EncodedBodyType, string, number, String2String] => { return [encBody, 'application/json', encBody.length, {} as String2String]; }
+        const params: #{operation_object[:args_name]} = #{fn}();
+        const instance: #{clsName} = new #{clsName}(params);
+        const original = #{clsName}.encoder;
+        #{clsName}.encoder = null;
+        shared.encoder = null;
+        #{source}.#{source == 'instance' ? 'setEncoder(enc)' : 'encoder = enc'};
+        const uri = instance.prepare();
+        expect(uri.ri).to.have.property('body', encBody);
+        #{clsName}.encoder = original;
+    });
+EOB
+            out.push(s)
+          end
+          [ 'instance', clsName ].each do |source|
+            s = <<EOB
+    it('Encoder via #{source}, overriding shared', function () {
+        const encBody = JSON.stringify('body from #{source} encoder');
+        const enc = (body: any): [EncodedBodyType, string, number, String2String] => { return [encBody, 'application/json', encBody.length, {} as String2String]; }
+        const sharedEnc = (body: any): [EncodedBodyType, string, number, String2String] => { return ['wrong', 'application/json', 5, {} as String2String]; }
+        const params: #{operation_object[:args_name]} = #{fn}();
+        const instance: #{clsName} = new #{clsName}(params);
+        const original = #{clsName}.encoder;
+        #{clsName}.encoder = null;
+        shared.encoder = sharedEnc;
+        #{source}.#{source == 'instance' ? 'setEncoder(enc)' : 'encoder = enc'};
+        const uri = instance.prepare();
+        expect(uri.ri).to.have.property('body', encBody);
+        #{clsName}.encoder = original;
+        shared.encoder = null;
+    });
+EOB
+            out.push(s)
+          end
+          s = <<EOB
+    it('Encoder via instance, overriding #{clsName} and shared', function () {
+        const encBody = JSON.stringify('body from instance encoder');
+        const enc = (body: any): [EncodedBodyType, string, number, String2String] => { return [encBody, 'application/json', encBody.length, {} as String2String]; }
+        const sharedEnc = (body: any): [EncodedBodyType, string, number, String2String] => { return ['wrong', 'application/json', 5, {} as String2String]; }
+        const params: #{operation_object[:args_name]} = #{fn}();
+        const instance: #{clsName} = new #{clsName}(params);
+        shared.encoder = sharedEnc;
+        instance.setEncoder(enc);
+        const uri = instance.prepare();
+        expect(uri.ri).to.have.property('body', encBody);
+        shared.encoder = null;
+    });
+EOB
+          out.push(s)
+          s = <<EOB
+    it('Encoder that produces invalid content-type', function () {
+        const enc = (body: any): [EncodedBodyType, string, number, String2String] => { return ['encodedBody', 'somevalue', 10, {} as String2String]; }
+        const params: #{operation_object[:args_name]} = #{fn}();
+        const r: #{clsName} = new #{clsName}(params).setEncoder(enc);
+        expect(() => r.prepare()).to.throw(#{clsReqError}, 'encoded content-type');
+    });
+EOB
+          out.push(s)
+          s = <<EOB
+    it('Encoder adds other headers', function () {
+        const params: #{operation_object[:args_name]} = #{fn}();
+        const enc = (body: any): [EncodedBodyType, string, number, String2String] => {
+          for (const key in Object.keys(params)) {
+              if (key.startsWith('body'))
+                  return ['encodedBody', #{clsName}.body2mediaTypes.get(key)![0], 11, { headerName: 'headerValue' }];
+          }
+          return ['encodedBody', #{clsName}.allBodyMediaTypes[0], 11, { headerName: 'headerValue' }];
+        }
+        const r: #{clsName} = new #{clsName}(params).setEncoder(enc);
+        const p: UrlRequestInit = r.prepare();
+        expect((p.ri.headers! as Headers).get('headerName')).to.equal('headerValue');
+    });
+EOB
+          out.push(s)
+          s = <<EOB
+    it('No body to encode', function () {
+        const params: Partial<#{operation_object[:args_name]}> = #{fn}();
+        for (const key of Object.keys(params)) {
+            if (key.startsWith('body'))
+                delete params[key as keyof #{operation_object[:args_name]}];
+        }
+        const r: #{clsName} = new #{clsName}(params as #{operation_object[:args_name]});
+        expect(() => r.prepare({ ignoreMismatches: true })).to.throw(#{clsReqError}, 'no body present');
+    });
+EOB
+          out.push(s)
+          tgt = Gen.x.cfg.fetch('target', 'browser')
+          if tgt == 'browser'
+            enc_arr = 'new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8])'
+          elsif tgt == 'node'
+            enc_arr = "Buffer.from('encodedBody')"
+          end
+          s = <<EOB
+    it('Already encoded, same instance', function () {
+        const params: #{operation_object[:args_name]} = #{fn}();
+        for (const key of Object.keys(params)) {
+            if (key.startsWith('body'))
+                delete params[key as keyof #{operation_object[:args_name]}];
+        }
+        params.encoded = #{enc_arr};
+        const r: #{clsName} = new #{clsName}(params);
+        const p: UrlRequestInit = r.prepare();
+        expect(Object.is(params.encoded, p.ri.body)).to.be.true;
+    });
+EOB
+          out.push(s)
+        end
+      end
+      operation_object[:fail].each do |fn|
+        s = <<EOB
+    it('Fail using #{fn}', function () {
+        const params: #{operation_object[:args_name]} = #{fn}();
+        const r: #{clsName} = new #{clsName}(params);
+        expect(() => r.prepare()).to.throw(#{clsReqError}, 'parameters do not conform');
+    });
+EOB
+        out.push(s)
+      end
+      operation_object[:typefail].each do |fn|
+        s = <<EOB
+    it('Fail using #{fn}', function () {
+        const params: #{operation_object[:args_name]} = #{fn}();
+        const r: #{clsName} = new #{clsName}(params);
+        expect(() => r.prepare()).to.throw(#{clsReqError}, 'parameters do not conform');
+    });
+EOB
+        out.push(s)
+      end
+      operation_object[:throw].each do |fn|
+        s = <<EOB
+    it('Fail using #{fn}', function () {
+        const params: #{operation_object[:args_name]} = #{fn}();
+        const r: #{clsName} = new #{clsName}(params);
+        expect(() => r.prepare()).to.throw(Error, 'body');
+    });
+EOB
+        out.push(s)
+      end
+    end
+    out.push('});')
+  end
+end
+# Call mock response could be set up to provide desired response.
+Gen.output.join(out)
+%>
+
+// Response class tests.
+
+const utf8encoder = new TextEncoder();
+
+function bodyData(contentType: string, item: any): [Uint8Array, string, number] {
+    const content: Uint8Array = utf8encoder.encode(JSON.stringify(item));
+    if (contentType == 'application/octet-stream') {
+        return [content, contentType, content.length];
+    }
+    return [content, `${contentType}; charset=utf-8`, content.length];
+}
+
+<%=
+out = []
+Gen.doc['paths'].each do |path, path_item_object|
+  oos = OpenAPISourceTools::ApiObjects.operation_objects(path_item_object)
+  oos.each do |method, operation_object|
+    oid = operation_object['operationId']
+    next if oid.nil?
+    clsName = operation_object[:name]
+    clsRespName = operation_object[:resp_name]
+    clsRespError = operation_object[:resp_error]
+    out.push("describe('#{oid} #{clsRespName}', function () {")
+    unless operation_object.key?(:responses)
+      warn("#{path} #{method} no response")
+      next
+    end
+    status_order = operation_object[:responses][:status_order]
+    code2content = operation_object[:responses][:code2content]
+    # Figure out what code to use in case there are ranges or default.
+    has_default = false
+    ranges = {}
+    code2content.keys.each do |code|
+      dc = code.downcase
+      if dc == 'default'
+        has_default = true
+        ranges[code] = { key: code, code: dc, low: 100, high: 599 }
+      elsif dc.end_with?('xx')
+        hundreds = dc[0..-2].to_i * 100
+        ranges[code] = { key: code, code: dc, low: hundreds, high: hundreds + 99 }
+      elsif dc.end_with?('x')
+        tens = dc[0..-1].to_i * 10
+        ranges[code] = { key: code, code: dc, low: tens, high: tens + 9 }
+      else
+        ones = dc.to_i
+        ranges[code] = { key: code, code: dc, low: ones, high: ones }
+      end
+    end
+    order = ranges.values.sort do |a, b|      
+      d = (a[:high] - a[:low]) <=> (b[:high] - b[:low])
+      if d.zero?
+        d = a[:low] <=> b[:low]
+        if d.zero?
+          a[:high] <=> b[:high]
+        else
+          d
+        end
+      else
+        d
+      end
+    end
+    used_status_codes = Set.new
+    order.each do |info|
+      if info[:low] == info[:high]
+        used_status_codes.add(info[:low])
+        code2content[info[:key]][:status_code] = info[:low]
+      else
+        (info[:low]..info[:high]).each do |k|
+          next if used_status_codes.member?(k)
+          used_status_codes.add(k)
+          code2content[info[:key]][:status_code] = k
+          break
+        end
+      end
+    end
+    status_vars = code2content.values.map { |info| info[:status_code] }.sort!
+    has_599 = false
+    status_order.each do |key|
+      info = code2content[key]
+      status_code = info[:status_code]
+      has_599 = true if status_code == 599
+      [ nil, false, true ].each do |throwNon2xx|
+        [ nil, false, true ].each do |throwBodyMismatch|
+          [ :none, :fail, :pass, :typefail ].each do |body_kind|
+            # No body for this status code.
+            if info[:content].empty?
+              if body_kind == :fail || body_kind == :typefail
+                if throwNon2xx == true && status_code < 200 || 300 <= status_code
+                  tst = <<EOF
+      try {
+          await #{clsRespName}.obtain(args);
+          expect(true).to.be.false;
+      }
+      catch (err) {
+          expect(err instanceof #{clsRespError}).to.be.true;
+          expect((err as Error).message).to.include('non-2xx');
+      }
+EOF
+                elsif throwBodyMismatch == true
+                  tst = <<EOF
+      try {
+          await #{clsRespName}.obtain(args);
+          expect(true).to.be.false;
+      }
+      catch (err) {
+          expect(err instanceof #{clsRespError}).to.be.true;
+          expect((err as Error).message).to.include('body mismatch');
+      }
+EOF
+                else
+                  tst = <<EOF
+      const out: #{clsRespName} = await #{clsRespName}.obtain(args);
+      expect(Object.is(out.response, resp)).to.be.true;
+      expect(Object.is(out.caller, args.caller)).to.be.true;
+#{status_vars.map { |v| "expect(out.c#{v}).to.be.undefined;" }.join("\n")}
+EOF
+                end
+                s = <<EOF
+    it('#{throwNon2xx ? 'throw non-2xx ' : ''}#{throwBodyMismatch ? 'throwBodyMismatch ' : ''}#{status_code} #{body_kind.to_s}', async function () {
+      const [bd, ct, cl] = bodyData('application/json', () => { return { any: 'fails' }; });
+      const hdrs = new Headers();
+      hdrs.set('content-type', ct);
+      hdrs.set('content-length', cl.toString());
+      const resp: Response = new Response(bd, {
+        status: #{status_code},
+        headers: hdrs
+      });
+      const args: #{clsRespName}Args = {
+        #{throwNon2xx.nil? ? '// ' : ''} #{throwNon2xx ? 'throwNon2xx: true,' : 'throwNon2xx: false,'}
+        #{throwBodyMismatch.nil? ? '// ' : ''} #{throwBodyMismatch ? 'throwBodyMismatch: true,' : 'throwBodyMismatch: false,'}
+        caller: { faker: 'caller' } as any as #{clsName},
+        response: resp
+      };
+#{tst}
+    });
+EOF
+                out.push(s) unless status_code == 204 # Response constructor throws.
+              elsif body_kind == :none
+                if throwNon2xx == true && status_code < 200 || 300 <= status_code
+                  tst = <<EOF
+      try {
+          await #{clsRespName}.obtain(args);
+          expect(true).to.be.false;
+      }
+      catch (err) {
+          expect(err instanceof #{clsRespError}).to.be.true;
+          expect((err as Error).message).to.include('non-2xx');
+      }
+EOF
+                else
+                  tst = <<EOF
+      const out: #{clsRespName} = await #{clsRespName}.obtain(args);
+      expect(Object.is(out.response, resp)).to.be.true;
+      expect(Object.is(out.caller, args.caller)).to.be.true;
+      expect(out).to.have.property('#{info[:status_var]}').not.to.be.undefined;
+#{status_vars.reject { |v| "c#{v}" == info[:status_var] }.map { |v| "expect(out.c#{v}).to.be.undefined;" }.join("\n")}
+EOF
+                end
+                s = <<EOF
+    it('#{throwNon2xx ? 'throw non-2xx ' : ''}#{throwBodyMismatch ? 'throwBodyMismatch ' : ''}#{status_code} #{body_kind.to_s}', async function () {
+      const resp: Response = new Response(null, {
+        status: #{status_code}
+      });
+      const args: #{clsRespName}Args = {
+        #{throwNon2xx.nil? ? '// ' : ''}throwNon2xx: #{throwNon2xx ? 'true' : 'false'},
+        #{throwBodyMismatch.nil? ? '// ' : ''}throwBodyMismatch: #{throwBodyMismatch ? 'true' : 'false'},
+        caller: { fake: 'caller' } as any as #{clsName},
+        response: resp
+      };
+#{tst}
+    });
+EOF
+                out.push(s)
+              end
+              next
+            end
+            # Loop over all content types for this status code.
+            info[:content].keys.sort!.map do |ct|
+              if ct != 'application/json'
+                # Support for other types requires user-provided encoding function.
+                out.push("// No function to encode body to content-type #{ct}")
+                next
+              end
+              mr = info[:content][ct] # Has mto, rt (response type).
+              # rt[:type] is mto[:decoded] is deferenced mto['schema']
+              # Bad and good body in response.body.
+              # If need bad and no fail maker, skip.
+              # If need good and no pass maker, skip.
+              schema = mr[:rt][:type]
+              next if body_kind != :none && schema[body_kind].empty?
+              if body_kind == :pass
+                body_chk = <<EOF
+      expect(out.mismatch).to.equal(0);
+      expect(out).to.have.property('#{mr[:rt][:name]}');
+      expect(#{mr[:rt][:type][:is]}(out.#{mr[:rt][:name]})).to.be.true;
+      expect(out).to.have.property('#{info[:status_var]}');
+      expect(out.#{info[:status_var]}).to.have.property('#{mr[:rt][:name]}');
+      expect(Object.is(out.#{info[:status_var]}!.#{mr[:rt][:name]}, out.#{mr[:rt][:name]})).to.be.true;
+EOF
+              else # Fail, typefail, and none all fail is-check.
+                body_chk = <<EOF
+      expect(out.mismatch).to.equal(2);
+      expect(out).not.to.have.property('#{info[:status_var]}');
+EOF
+              end
+              # ct is content-type, pair with loader, ties with encoded body
+              # response.body gets a ReadableStream of the encoded body.
+              # response.headers gets content-type from ct.
+              # response.status is status_code as number if not already. Check default.
+              # Keep track of has_500. Ensure at least one is not ok.
+              # args.loader gets the loader based on ct.
+
+              # Default loaders must be covered. They will fail body checks.
+              # Then there is custom loader set in multiple levels.
+
+              # Does json() decode uft-8? One would hope so...
+              # Otherwise read blob, decode if content-encoding, proceed.
+              if throwNon2xx == true && (status_code < 200 || 300 <= status_code)
+                tst = <<EOF
+      try {
+          await #{clsRespName}.obtain(args);
+          expect(true).to.be.false;
+      }
+      catch (err) {
+          expect(err instanceof #{clsRespError}).to.be.true;
+          expect((err as Error).message).to.include('non-2xx');
+      }
+EOF
+              elsif throwBodyMismatch == true && body_kind != :pass
+                tst = <<EOF
+      try {
+          await #{clsRespName}.obtain(args);
+          expect(true).to.be.false;
+      }
+      catch (err) {
+          expect(err instanceof #{clsRespError}).to.be.true;
+          expect((err as Error).message).to.include('body mismatch');
+      }
+EOF
+              elsif body_kind != :pass
+                tst = <<EOF
+      const out: #{clsRespName} = await #{clsRespName}.obtain(args);
+      expect(Object.is(out.response, resp)).to.be.true;
+      expect(Object.is(out.caller, args.caller)).to.be.true;
+#{status_vars.map { |v| "expect(out.c#{v}).to.be.undefined;" }.join("\n")}
+EOF
+              else
+                tst = <<EOF
+      const out: #{clsRespName} = await #{clsRespName}.obtain(args);
+      expect(Object.is(out.response, resp)).to.be.true;
+      expect(Object.is(out.caller, args.caller)).to.be.true;
+      expect(out).to.have.property('#{info[:status_var]}').not.to.be.undefined;
+#{status_vars.reject { |v| "c#{v}" == info[:status_var] }.map { |v| "expect(out.c#{v}).to.be.undefined;" }.join("\n")}
+#{body_chk}
+EOF
+              end
+              if body_kind == :none
+                prep = <<EOF
+      const [bd, ct, cl] = bodyData('#{ct}', {});
+      const hdrs = new Headers();
+      hdrs.set('content-type', ct);
+      hdrs.set('content-length', cl.toString());
+      const resp: Response = new Response(null, {
+        status: #{status_code},
+        headers: hdrs
+      });
+EOF
+              else
+                mak = schema[body_kind].first
+                unless mak.nil?
+                  prep = <<EOF
+      const [bd, ct, cl] = bodyData('#{ct}', #{mak}());
+      const hdrs = new Headers();
+      hdrs.set('content-type', ct);
+      hdrs.set('content-length', cl.toString());
+      const resp: Response = new Response(bd, {
+        status: #{status_code},
+        headers: hdrs
+      });
+EOF
+                else
+                  prep = nil
+                end
+              end
+              unless prep.nil?
+                s = <<EOF
+    it('#{throwNon2xx ? 'throw non-2xx ' : ''}#{throwBodyMismatch ? 'throwBodyMismatch ' : ''}#{status_code} #{body_kind.to_s}', async function () {
+#{prep}
+      const args: #{clsRespName}Args = {
+        #{throwNon2xx.nil? ? '// ' : ''} #{throwNon2xx ? 'throwNon2xx: true,' : 'throwNon2xx: false,'}
+        #{throwBodyMismatch.nil? ? '// ' : ''} #{throwBodyMismatch ? 'throwBodyMismatch: true,' : 'throwBodyMismatch: false,'}
+        caller: { fake: 'caller' } as any as #{clsName},
+        response: resp
+      };
+#{tst}
+    });
+EOF
+                out.push(s)
+              end
+            end
+          end
+        end
+      end
+      next if info[:content].empty?
+      # Add content-type invalid header value test here. Otherwise like pass.
+      mr = info[:content][info[:content].keys.first]
+      schema = mr[:rt][:type]
+      ct = 'a' * (1 + info[:content].keys.map(&:size).max);
+      mak = schema[:pass].first
+      unless mak.nil?
+        s = <<EOF
+    it('#{status_code} unexpected header', async function () {
+      const [bd, ct, cl] = bodyData('#{ct}', #{mak}());
+      const hdrs = new Headers();
+      hdrs.set('content-type', ct);
+      hdrs.set('content-length', cl.toString());
+      const resp: Response = new Response(bd, {
+        status: #{status_code},
+        headers: hdrs
+      });
+      const args: #{clsRespName}Args = {
+        throwNon2xx: false,
+        throwBodyMismatch: false,
+        caller: { fake: 'caller' } as any as #{clsName},
+        response: resp
+      };
+      try {
+          await #{clsRespName}.obtain(args);
+          expect(true).to.be.false;
+      }
+      catch (err) {
+          expect(err instanceof #{clsRespError}).to.be.true;
+          expect((err as Error).message).to.include('unexpected content-type');
+      }
+    });
+EOF
+        out.push(s)
+      end
+    end
+    unless has_default || has_599
+      [ nil, false, true ].each do |throwNon2xx|
+        status_code = 599
+        if throwNon2xx
+          tst = <<EOF
+      try {
+          await #{clsRespName}.obtain(args);
+          expect(true).to.be.false;
+      }
+      catch (err) {
+          expect(err instanceof #{clsRespError}).to.be.true;
+          expect((err as Error).message).to.include('non-2xx');
+      }
+EOF
+        else
+          tst = <<EOF
+      const out: #{clsRespName} = await #{clsRespName}.obtain(args);
+      expect(Object.is(out.response, resp)).to.be.true;
+      expect(Object.is(out.caller, args.caller)).to.be.true;
+#{status_vars.map { |v| "expect(out.c#{v}).to.be.undefined;" }.join("\n")}
+      expect(out).to.have.property('mismatch', 2);
+EOF
+        end
+        s = <<EOF
+    it('#{throwNon2xx ? 'throw non-2xx ' : (throwNon2xx.nil? ? '' : 'no-throw ')}#{status_code}', async function () {
+      const resp: Response = new Response(null, {
+        status: #{status_code}
+      });
+      const args: #{clsRespName}Args = {
+        #{throwNon2xx.nil? ? '// ' : ''}throwNon2xx: #{throwNon2xx ? 'true' : 'false'},
+        caller: { fake: 'caller' } as any as #{clsName},
+        response: resp
+      };
+#{tst}
+    });
+EOF
+        out.push(s)
+      end
+    end
+    out.push('});')
+  end
+end
+Gen.output.join(out)
+%>

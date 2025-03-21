@@ -1,0 +1,114 @@
+<%=
+Gen.output.config = Gen.x.cfg['ts_indentation']
+Gen.x.generator_info
+%>
+
+import type {<%= %w[CallExtras].concat(Gen.x.schemas.import_types).join(', ') %>} from './schemas.d.ts';
+import type { RequestInitModifier } from './callclasses.d.ts';
+import type { EncoderFunction } from './schemas.d.ts';
+// Type that holds all parameters suffixed by their type.
+
+export type AllParameters = {
+<%=
+name2types = {}
+Gen.doc['paths'].each do |path, path_item_object|
+  oos = OpenAPISourceTools::ApiObjects.operation_objects(path_item_object)
+  oos.each do |method, operation_object|
+    next if operation_object[:parameterless]
+    operation_object[:paraschemas].each do |ps|
+      types = name2types.fetch(ps[:param][:name], [])
+      types.push({
+        name: ps[:param][:name],
+        type: ps[:schema][:name],
+        ps: ps,
+        count: 0,
+        shared: '',
+        majority: false,
+        ooid: operation_object.object_id
+      })
+      name2types[ps[:param][:name]] = types
+      ps[:shared] = types.last
+    end
+  end
+end
+out = []
+ap = {}
+names = name2types.keys.sort!
+names.each do |name|
+  types = name2types[name]
+  uniqs = types.map { |ti| ti[:type] }.uniq
+  type2count = {}
+  uniqs.each do |type|
+    type2count[type] = types.count { |ti| ti[:type] == type }
+  end
+  uniqs.sort! { |a, b| type2count[b] <=> type2count[a] }
+  if uniqs.size == 1 || uniqs.size > 1 && type2count[uniqs.first] > type2count[uniqs[1]]
+    out.push("  #{name}?: #{uniqs.first};")
+    types.select { |ti| ti[:type] == uniqs.first }.each do |ti|
+      ti[:majority] = true
+      ap[name] = ap.fetch(name, []).push(ti)
+    end
+  end
+  uniqs.each do |type|
+    combo = name + type
+    out.push("  #{combo}?: #{type};")
+    types.select { |ti| ti[:type] == type }.each do |ti|
+      ti[:shared] = combo
+      ti[:count] = type2count[type]
+      ap[combo] = ap.fetch(combo, []).push(ti)
+    end
+  end
+end
+Gen.doc[:all_params] = ap
+Gen.output.join(out)
+%>
+}
+
+export type Shared = {
+    serverUrl?: string;
+    params: AllParameters;
+    extras: CallExtras;
+    modifier: RequestInitModifier|null;
+    abortSignalable: boolean;
+    encoder: EncoderFunction|null;
+}
+
+export const shared: Shared = {
+    params: {},
+    extras: {},
+    modifier: null,
+    abortSignalable: false,
+    encoder: null
+}
+
+// Functions to get a partial of shared that contains exactly what callclass args type has.
+
+<%=
+out = []
+Gen.doc['paths'].each do |path, path_item_object|
+  oos = OpenAPISourceTools::ApiObjects.operation_objects(path_item_object)
+  oos.each do |method, operation_object|
+    next if operation_object[:parameterless]
+    assigns = []
+    operation_object[:paraschemas].each do |ps|
+      ti = ps[:shared]
+      assigns.push("  if (shared.params.#{ti[:shared]} !== undefined) out.#{ti[:name]} = shared.params.#{ti[:shared]};")
+      if ti[:majority]
+        assigns.push("  else if (shared.params.#{ti[:name]} !== undefined) out.#{ti[:name]} = shared.params.#{ti[:name]};")
+      end
+    end
+    func_name = "shared#{operation_object[:args_name]}"
+    Gen.x.shared.functions.push(func_name)
+    operation_object[:shared] = func_name
+    s = <<EOB
+export function #{func_name}(): Partial<#{operation_object[:args_name]}> {
+  const out: Partial<#{operation_object[:args_name]}> = {};
+#{assigns.join("\n")}
+  return out;
+}
+EOB
+    out.push(s)
+  end
+end
+Gen.output.join(out)
+%>

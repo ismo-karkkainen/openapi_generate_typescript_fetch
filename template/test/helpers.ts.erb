@@ -1,0 +1,1214 @@
+<%=
+Gen.output.config = Gen.x.cfg['ts_indentation']
+Gen.x.generator_info
+%>
+
+import {expect} from 'chai';
+import type {String2String} from '../src/schemas.d.ts';
+import type {Bodyful,Name2Functions,LoaderFunction,LoaderMap,SchemaFunctions,PatternFunctions,SchemaCheckers} from '../src/helpers.js';
+import {addJsonBody,str2integer,str2float,isSchema,baseSchema,setExtras,query,headers,getLoader} from '../src/helpers.js';
+
+describe('addJsonBody', function () {
+  it('add body and headers', function () {
+    const target: Bodyful = {};
+    const body = {key: 'value'};
+    const hdrs: String2String = {};
+    addJsonBody(target, body, hdrs);
+    const td = new TextDecoder();
+    expect(JSON.parse(td.decode(target.body))).to.deep.equal(body);
+    expect(hdrs['Content-Type']).to.equal('application/json');
+    expect(hdrs['Content-Length']).to.equal(target.body.length.toString());
+  })
+  it('no body with null', function () {
+    const target: Bodyful = {};
+    const hdrs: String2String = {};
+    addJsonBody(target, null, hdrs);
+    expect(target).not.to.have.property('body');
+    expect(hdrs).not.to.have.property('Content-Type');
+    expect(hdrs).not.to.have.property('Content-Length');
+  })
+  it('no body with undefined', function () {
+    const target: Bodyful = {};
+    const hdrs: String2String = {};
+    addJsonBody(target, undefined, hdrs);
+    expect(target).not.to.have.property('body');
+    expect(hdrs).not.to.have.property('Content-Type');
+    expect(hdrs).not.to.have.property('Content-Length');
+  })
+  it('handle empty object body', function () {
+    const target: Bodyful = {};
+    const body = {};
+    const hdrs: String2String = {};
+    addJsonBody(target, body, hdrs);
+    const td = new TextDecoder();
+    expect(JSON.parse(td.decode(target.body))).to.deep.equal({});
+    expect(hdrs['Content-Type']).to.equal('application/json');
+    expect(hdrs['Content-Length']).to.equal(target.body.length.toString());
+  })
+  it('preserves existing headers but overwrites Content-Type and Content-Length', function () {
+    const target: Bodyful = {};
+    const body = {test: 'value'};
+    const hdrs: String2String = {
+      'Authorization': 'Bearer token',
+      'Content-Type': 'text/plain', // This should be overwritten
+      'Content-Length': '999' // This should be overwritten
+    };
+    addJsonBody(target, body, hdrs);
+    expect(hdrs['Authorization']).to.equal('Bearer token');
+    expect(hdrs['Content-Type']).to.equal('application/json');
+    expect(hdrs['Content-Length']).to.equal(target.body.length.toString());
+    expect(hdrs['Content-Length']).not.to.equal('999');
+  })
+  it('handle primitive values as body', function () {
+    const target1: Bodyful = {};
+    const hdrs1: String2String = {};
+    addJsonBody(target1, 'string value', hdrs1);
+    const td = new TextDecoder();
+    expect(JSON.parse(td.decode(target1.body))).to.equal('string value');
+
+    const target2: Bodyful = {};
+    const hdrs2: String2String = {};
+    addJsonBody(target2, 42, hdrs2);
+    expect(JSON.parse(td.decode(target2.body))).to.equal(42);
+
+    const target3: Bodyful = {};
+    const hdrs3: String2String = {};
+    addJsonBody(target3, true, hdrs3);
+    expect(JSON.parse(td.decode(target3.body))).to.equal(true);
+  })
+})
+
+describe('str2integer', function () {
+  it('convert string to integer', function () {
+    expect(str2integer('10')).to.equal(10);
+  })
+  it('return null for null input', function () {
+    expect(str2integer(null)).to.be.null;
+  })
+  it('handle edge cases and invalid inputs', function () {
+    // Valid cases
+    expect(str2integer('0')).to.equal(0);
+    expect(str2integer('-5')).to.equal(-5);
+    expect(str2integer('123')).to.equal(123);
+
+    // Whitespace handling
+    expect(str2integer('  42  ')).to.equal(42);
+
+    // Invalid inputs - parseInt behavior
+    expect(str2integer('abc')).to.be.NaN;
+    expect(str2integer('')).to.be.NaN;
+    expect(str2integer('12.5')).to.equal(12); // parseInt truncates
+    expect(str2integer('12abc')).to.equal(12); // parseInt parses partial
+    expect(str2integer('abc123')).to.be.NaN;
+
+    // Special cases
+    expect(str2integer('Infinity')).to.be.NaN;
+    expect(str2integer('-Infinity')).to.be.NaN;
+    expect(str2integer('NaN')).to.be.NaN;
+  })
+})
+
+describe('str2float', function () {
+  it('convert string to float', function () {
+    expect(str2float('10.5')).to.equal(10.5);
+  })
+  it('return null for null input', function () {
+    expect(str2float(null)).to.be.null;
+  })
+  it('handle edge cases and invalid inputs', function () {
+    // Valid cases
+    expect(str2float('0')).to.equal(0);
+    expect(str2float('-5.5')).to.equal(-5.5);
+    expect(str2float('123.456')).to.equal(123.456);
+    expect(str2float('123')).to.equal(123);
+
+    // Scientific notation
+    expect(str2float('1.23e5')).to.equal(123000);
+    expect(str2float('1.23e-5')).to.equal(0.0000123);
+
+    // Whitespace handling
+    expect(str2float('  42.5  ')).to.equal(42.5);
+
+    // Invalid inputs
+    expect(str2float('abc')).to.be.NaN;
+    expect(str2float('')).to.be.NaN;
+    expect(str2float('12.5abc')).to.equal(12.5); // parseFloat parses partial
+    expect(str2float('abc12.5')).to.be.NaN;
+
+    // Special values
+    expect(str2float('Infinity')).to.equal(Infinity);
+    expect(str2float('-Infinity')).to.equal(-Infinity);
+    expect(str2float('NaN')).to.be.NaN;
+  })
+})
+
+describe('isSchema', function () {
+  // From claude-3-7-sonnet-20250219 with minor modifications.
+  it('validates required fields correctly', function () {
+    // Setup schema checkers with required fields
+    const checkers: SchemaCheckers = {
+      requiredKeys: ['name'],
+      required: {
+        'name': {
+          base: (x) => x,
+          is: (x) => typeof x === 'string'
+        }
+      },
+      optional: {},
+      patterns: []
+    };
+
+    // Valid case - has required field with correct type
+    expect(isSchema({ name: 'test' }, checkers)).to.be.true;
+
+    // Invalid case - has required field with wrong type
+    expect(isSchema({ name: 123 }, checkers)).to.be.false;
+
+    // Invalid case - missing required field
+    expect(isSchema({}, checkers)).to.be.false;
+  });
+
+  it('validates optional fields correctly', function () {
+    // Setup schema checkers with optional fields
+    const checkers: SchemaCheckers = {
+      requiredKeys: [],
+      required: {},
+      optional: {
+        'age': {
+          base: (x) => x,
+          is: (x) => typeof x === 'number'
+        }
+      },
+      patterns: []
+    };
+
+    // Valid case - has optional field with correct type
+    expect(isSchema({ age: 25 }, checkers)).to.be.true;
+
+    // Valid case - missing optional field
+    expect(isSchema({}, checkers)).to.be.true;
+
+    // Invalid case - has optional field with wrong type
+    expect(isSchema({ age: '25' }, checkers)).to.be.false;
+  });
+
+  it('validates pattern fields correctly', function () {
+    // Setup schema checkers with pattern fields
+    const checkers: SchemaCheckers = {
+      requiredKeys: [],
+      required: {},
+      optional: {},
+      patterns: [
+        {
+          re: new RegExp('^prefix_.*$'),
+          funcs: {
+            base: (x) => x,
+            is: (x) => typeof x === 'boolean'
+          }
+        }
+      ]
+    };
+
+    // Valid case - has pattern field with correct type
+    expect(isSchema({ prefix_field: true }, checkers)).to.be.true;
+
+    // Invalid case - has pattern field with wrong type
+    expect(isSchema({ prefix_field: 'true' }, checkers)).to.be.false;
+
+    // Valid case - no pattern fields
+    expect(isSchema({}, checkers)).to.be.true;
+  });
+
+  it('validates additional fields correctly', function () {
+    // Setup schema checkers with additional fields
+    const checkers: SchemaCheckers = {
+      requiredKeys: [],
+      required: {},
+      optional: {},
+      patterns: [],
+      additional: {
+        is: (x) => typeof x === 'number'
+      }
+    };
+
+    // Valid case - has additional field with correct type
+    expect(isSchema({ random_field: 42 }, checkers)).to.be.true;
+
+    // Invalid case - has additional field with wrong type
+    expect(isSchema({ random_field: 'string' }, checkers)).to.be.false;
+  });
+
+  it('validates complex schemas correctly', function () {
+    // Setup complex schema checkers
+    const checkers: SchemaCheckers = {
+      requiredKeys: ['id'],
+      required: {
+        'id': {
+          base: (x) => x,
+          is: (x) => typeof x === 'number'
+        }
+      },
+      optional: {
+        'name': {
+          base: (x) => x,
+          is: (x) => typeof x === 'string'
+        }
+      },
+      patterns: [
+        {
+          re: new RegExp('^meta_.*$'),
+          funcs: {
+            base: (x) => x,
+            is: (x) => typeof x === 'string'
+          }
+        }
+      ],
+      additional: {
+        is: (x) => typeof x === 'boolean'
+      }
+    };
+
+    // Valid case - complex object with all types of fields
+    expect(isSchema({
+      id: 1,
+      name: 'test',
+      meta_created: '2023-01-01',
+      random_field: true
+    }, checkers)).to.be.true;
+
+    // Invalid case - missing required field
+    expect(isSchema({
+      name: 'test',
+      meta_created: '2023-01-01',
+      random_field: true
+    }, checkers)).to.be.false;
+
+    // Invalid case - wrong type for pattern field
+    expect(isSchema({
+      id: 1,
+      name: 'test',
+      meta_created: 123,
+      random_field: true
+    }, checkers)).to.be.false;
+
+    // Invalid case - wrong type for additional field
+    expect(isSchema({
+      id: 1,
+      name: 'test',
+      meta_created: '2023-01-01',
+      random_field: 'not-boolean'
+    }, checkers)).to.be.false;
+  });
+
+  it('handles multiple pattern matches correctly', function () {
+    const checkers: SchemaCheckers = {
+      requiredKeys: [],
+      required: {},
+      optional: {},
+      patterns: [
+        {
+          re: new RegExp('^test_.*$'),
+          funcs: {
+            base: (x) => `pattern1:${x}`,
+            is: (x) => typeof x === 'string'
+          }
+        },
+        {
+          re: new RegExp('.*_suffix$'),
+          funcs: {
+            base: (x) => `pattern2:${x}`,
+            is: (x) => typeof x === 'string'
+          }
+        }
+      ]
+    };
+
+    // Field matches first pattern only
+    expect(isSchema({ test_field: 'value' }, checkers)).to.be.true;
+    // Field matches both patterns - should validate against the first match
+    expect(isSchema({ test_field_suffix: 'value' }, checkers)).to.be.true;
+    // Invalid type for pattern
+    expect(isSchema({ test_field: 123 }, checkers)).to.be.false;
+  });
+
+  it('handles empty and edge case schema configurations', function () {
+    // Empty checkers
+    const emptyCheckers: SchemaCheckers = {
+      requiredKeys: [],
+      required: {},
+      optional: {},
+      patterns: []
+    };
+    expect(isSchema({}, emptyCheckers)).to.be.true;
+    expect(isSchema({ any_field: 'any_value' }, emptyCheckers)).to.be.true;
+
+    // Only required keys, no validation functions
+    const noFuncCheckers: SchemaCheckers = {
+      requiredKeys: ['id'],
+      required: {},
+      optional: {},
+      patterns: []
+    };
+    expect(isSchema({ id: 'anything' }, noFuncCheckers)).to.be.true;
+    expect(isSchema({}, noFuncCheckers)).to.be.false;
+  });
+
+  it('handles objects with special properties', function () {
+    const checkers: SchemaCheckers = {
+      requiredKeys: [],
+      required: {},
+      optional: {},
+      patterns: [],
+      additional: {
+        is: (x) => true // Accept anything
+      }
+    };
+
+    // Objects with prototype properties should still work
+    const obj = Object.create({ inheritedProp: 'inherited' });
+    obj.ownProp = 'own';
+    expect(isSchema(obj, checkers)).to.be.true;
+
+    // Object with null prototype
+    const nullProtoObj = Object.create(null);
+    nullProtoObj.prop = 'value';
+    expect(isSchema(nullProtoObj, checkers)).to.be.true;
+  });
+
+  it('validates field precedence correctly', function () {
+    // Test precedence: required > optional > patterns > additional
+    const checkers: SchemaCheckers = {
+      requiredKeys: [],
+      required: {
+        'field': {
+          base: (x) => 'required',
+          is: (x) => typeof x === 'string'
+        }
+      },
+      optional: {
+        'field': { // Same field name - should be ignored in favor of required
+          base: (x) => 'optional',
+          is: (x) => typeof x === 'number'
+        }
+      },
+      patterns: [
+        {
+          re: new RegExp('^field$'),
+          funcs: {
+            base: (x) => 'pattern',
+            is: (x) => typeof x === 'boolean'
+          }
+        }
+      ],
+      additional: {
+        is: (x) => typeof x === 'object'
+      }
+    };
+
+    // Should validate as string (required), not number (optional) or boolean (pattern)
+    expect(isSchema({ field: 'test' }, checkers)).to.be.true;
+    expect(isSchema({ field: 123 }, checkers)).to.be.false;
+    expect(isSchema({ field: true }, checkers)).to.be.false;
+  });
+});
+
+describe('baseSchema', function () {
+  // From claude-3-7-sonnet-20250219 with minor modifications.
+  it('processes required fields correctly', function () {
+    // Setup schema checkers with required fields
+    const checkers: SchemaCheckers = {
+      requiredKeys: [],
+      required: {
+        'name': {
+          is: (x) => typeof x === 'string',
+          base: (x) => x.toUpperCase()
+        }
+      },
+      optional: {},
+      patterns: []
+    };
+
+    // Test with required field
+    const result = baseSchema({ name: 'test' }, checkers);
+    expect(result).to.deep.equal({ name: 'TEST' });
+  });
+
+  it('processes optional fields correctly', function () {
+    // Setup schema checkers with optional fields
+    const checkers: SchemaCheckers = {
+      requiredKeys: [],
+      required: {},
+      optional: {
+        'age': {
+          is: (x) => typeof x === 'number',
+          base: (x) => x * 2
+        }
+      },
+      patterns: []
+    };
+
+    // Test with optional field
+    const result = baseSchema({ age: 25 }, checkers);
+    expect(result).to.deep.equal({ age: 50 });
+
+    // Test without optional field
+    const emptyResult = baseSchema({}, checkers);
+    expect(emptyResult).to.deep.equal({});
+  });
+
+  it('processes pattern fields correctly', function () {
+    // Setup schema checkers with pattern fields
+    const checkers: SchemaCheckers = {
+      requiredKeys: [],
+      required: {},
+      optional: {},
+      patterns: [
+        {
+          re: new RegExp('^prefix_.*$'),
+          funcs: {
+            is: (x) => typeof x === 'boolean',
+            base: (x) => !x // Invert boolean
+          }
+        }
+      ]
+    };
+
+    // Test with pattern field
+    const result = baseSchema({ prefix_field: true }, checkers);
+    expect(result).to.deep.equal({ prefix_field: false });
+  });
+
+  it('processes additional fields correctly', function () {
+    // Setup schema checkers with additional fields
+    const checkers: SchemaCheckers = {
+      requiredKeys: [],
+      required: {},
+      optional: {},
+      patterns: [],
+      additional: {
+        is: (x) => typeof x === 'number',
+        base: (x) => x + 10
+      }
+    };
+
+    // Test with additional field
+    const result = baseSchema({ random_field: 42 }, checkers);
+    expect(result).to.deep.equal({ random_field: 52 });
+  });
+
+  it('handles additional fields without base function', function () {
+    // Setup schema checkers with additional fields but no base function
+    const checkers: SchemaCheckers = {
+      requiredKeys: [],
+      required: {},
+      optional: {},
+      patterns: [],
+      additional: {
+        is: (x) => typeof x === 'number'
+        // No base function
+      }
+    };
+
+    // Test with additional field
+    const result = baseSchema({ random_field: 42 }, checkers);
+    expect(result).to.deep.equal({}); // Should not include the field
+  });
+
+  it('processes complex schemas correctly', function () {
+    // Setup complex schema checkers
+    const checkers: SchemaCheckers = {
+      requiredKeys: [],
+      required: {
+        'id': {
+          is: (x) => typeof x === 'number',
+          base: (x) => x.toString()
+        }
+      },
+      optional: {
+        'name': {
+          is: (x) => typeof x === 'string',
+          base: (x) => x.toUpperCase()
+        }
+      },
+      patterns: [
+        {
+          re: new RegExp('^meta_.*$'),
+          funcs: {
+            is: (x) => typeof x === 'string',
+            base: (x) => x.substring(0, 10) // First 10 chars
+          }
+        }
+      ],
+      additional: {
+        is: (x) => typeof x === 'boolean',
+        base: (x) => !x // Invert boolean
+      }
+    };
+
+    // Test with complex object
+    const result = baseSchema({
+      id: 1,
+      name: 'test',
+      meta_created: '2023-01-01T12:34:56Z',
+      random_field: true
+    }, checkers);
+
+    expect(result).to.deep.equal({
+      id: '1',
+      name: 'TEST',
+      meta_created: '2023-01-01',
+      random_field: false
+    });
+  });
+
+  it('handles multiple pattern matches and precedence', function () {
+    const checkers: SchemaCheckers = {
+      requiredKeys: [],
+      required: {},
+      optional: {},
+      patterns: [
+        {
+          re: new RegExp('^test_.*$'),
+          funcs: {
+            is: (x) => typeof x === 'string',
+            base: (x) => `first:${x}`
+          }
+        },
+        {
+          re: new RegExp('.*_suffix$'),
+          funcs: {
+            is: (x) => typeof x === 'string',
+            base: (x) => `second:${x}`
+          }
+        }
+      ]
+    };
+
+    // Should use first matching pattern
+    const result = baseSchema({ test_field_suffix: 'value' }, checkers);
+    expect(result).to.deep.equal({ test_field_suffix: 'first:value' });
+  });
+
+  it('handles field precedence in processing', function () {
+    const checkers: SchemaCheckers = {
+      requiredKeys: [],
+      required: {
+        'field': {
+          is: (x) => typeof x === 'string',
+          base: (x) => `required:${x}`
+        }
+      },
+      optional: {
+        'field': { // Same field - should be ignored
+          is: (x) => typeof x === 'string',
+          base: (x) => `optional:${x}`
+        }
+      },
+      patterns: [
+        {
+          re: new RegExp('^field$'),
+          funcs: {
+            is: (x) => typeof x === 'string',
+            base: (x) => `pattern:${x}`
+          }
+        }
+      ],
+      additional: {
+        is: (x) => typeof x === 'string',
+        base: (x) => `additional:${x}`
+      }
+    };
+
+    const result = baseSchema({ field: 'test' }, checkers);
+    expect(result).to.deep.equal({ field: 'required:test' });
+  });
+
+  it('handles empty configurations and edge cases', function () {
+    // Empty checkers
+    const emptyCheckers: SchemaCheckers = {
+      requiredKeys: [],
+      required: {},
+      optional: {},
+      patterns: []
+    };
+    expect(baseSchema({ field: 'value' }, emptyCheckers)).to.deep.equal({});
+
+    // Checkers with empty patterns array
+    const noPatternCheckers: SchemaCheckers = {
+      requiredKeys: [],
+      required: {},
+      optional: {},
+      patterns: [],
+      additional: {
+        is: (x) => true,
+        base: (x) => `processed:${x}`
+      }
+    };
+    const result = baseSchema({ field: 'value' }, noPatternCheckers);
+    expect(result).to.deep.equal({ field: 'processed:value' });
+  });
+
+  it('handles objects with special properties correctly', function () {
+    const checkers: SchemaCheckers = {
+      requiredKeys: [],
+      required: {},
+      optional: {},
+      patterns: [],
+      additional: {
+        is: (x) => true,
+        base: (x) => `processed:${x}`
+      }
+    };
+
+    // Object with null prototype
+    const nullProtoObj = Object.create(null);
+    nullProtoObj.prop = 'value';
+    const result = baseSchema(nullProtoObj, checkers);
+    expect(result).to.deep.equal({ prop: 'processed:value' });
+  });
+});
+
+// Integration tests combining multiple functions
+describe('Integration Tests', function () {
+  it('combines addJsonBody with realistic API request scenario', function () {
+    // Simulate preparing an API request with complex data
+    const target: Bodyful = {};
+    const requestData = {
+      user: {
+        id: str2integer('123'),
+        score: str2float('98.5')
+      },
+      metadata: {
+        timestamp: new Date().toISOString(),
+        version: '1.0'
+      }
+    };
+    const headers: String2String = {
+      'Authorization': 'Bearer token123',
+      'X-Client-Version': '2.1.0'
+    };
+
+    addJsonBody(target, requestData, headers);
+
+    const td = new TextDecoder();
+    const decodedBody = JSON.parse(td.decode(target.body));
+    expect(decodedBody.user.id).to.equal(123);
+    expect(decodedBody.user.score).to.equal(98.5);
+    expect(headers['Content-Type']).to.equal('application/json');
+    expect(headers['Authorization']).to.equal('Bearer token123');
+  });
+
+  it('validates and processes API response with schema functions', function () {
+    // Simulate processing an API response
+    const apiResponse = {
+      user_id: 42,
+      user_name: 'john_doe',
+      meta_created: '2023-01-01T10:30:00Z',
+      meta_updated: '2023-01-02T15:45:00Z',
+      is_active: true,
+      score: 98.5
+    };
+
+    const checkers: SchemaCheckers = {
+      requiredKeys: ['user_id', 'user_name'],
+      required: {
+        'user_id': {
+          is: (x) => typeof x === 'number',
+          base: (x) => x.toString()
+        },
+        'user_name': {
+          is: (x) => typeof x === 'string',
+          base: (x) => x.replace('_', ' ').toUpperCase()
+        }
+      },
+      optional: {
+        'score': {
+          is: (x) => typeof x === 'number',
+          base: (x) => Math.round(x)
+        }
+      },
+      patterns: [
+        {
+          re: new RegExp('^meta_.*$'),
+          funcs: {
+            is: (x) => typeof x === 'string',
+            base: (x) => new Date(x).getTime() // Convert to timestamp
+          }
+        }
+      ],
+      additional: {
+        is: (x) => typeof x === 'boolean',
+        base: (x) => x ? 1 : 0 // Convert boolean to number
+      }
+    };
+
+    // First validate the response
+    expect(isSchema(apiResponse, checkers)).to.be.true;
+
+    // Then process it
+    const processed = baseSchema(apiResponse, checkers);
+    expect(processed).to.deep.equal({
+      user_id: '42',
+      user_name: 'JOHN DOE',
+      score: 99,
+      meta_created: new Date('2023-01-01T10:30:00Z').getTime(),
+      meta_updated: new Date('2023-01-02T15:45:00Z').getTime(),
+      is_active: 1
+    });
+  });
+
+  it('handles string conversion in realistic data transformation pipeline', function () {
+    // Simulate processing query parameters or form data
+    const queryParams = {
+      page: '1',
+      limit: '25',
+      score_min: '75.5',
+      score_max: '100.0',
+      active: 'true'
+    };
+
+    // Transform query parameters to proper types
+    const processedParams = {
+      page: str2integer(queryParams.page),
+      limit: str2integer(queryParams.limit),
+      score_min: str2float(queryParams.score_min),
+      score_max: str2float(queryParams.score_max),
+      active: queryParams.active === 'true'
+    };
+
+    expect(processedParams).to.deep.equal({
+      page: 1,
+      limit: 25,
+      score_min: 75.5,
+      score_max: 100.0,
+      active: true
+    });
+
+    // Use processed params in request body
+    const target: Bodyful = {};
+    const headers: String2String = {};
+    addJsonBody(target, processedParams, headers);
+
+    const td = new TextDecoder();
+    const decodedBody = JSON.parse(td.decode(target.body));
+    expect(decodedBody.page).to.equal(1);
+    expect(decodedBody.score_min).to.equal(75.5);
+  });
+
+  it('handles malformed data gracefully in integration scenario', function () {
+    // Test with invalid string inputs that would produce NaN
+    const malformedData = {
+      id: str2integer('not-a-number'),
+      score: str2float('invalid-float'),
+      valid_field: 'test'
+    };
+
+    expect(malformedData.id).to.be.NaN;
+    expect(malformedData.score).to.be.NaN;
+
+    // Schema validation should handle NaN values appropriately
+    const checkers: SchemaCheckers = {
+      requiredKeys: [],
+      required: {
+        'id': {
+          is: (x) => typeof x === 'number' && !isNaN(x),
+          base: (x) => x
+        }
+      },
+      optional: {},
+      patterns: [],
+      additional: {
+        is: (x) => typeof x === 'string',
+        base: (x) => x
+      }
+    };
+
+    // Should be invalid due to NaN id
+    expect(isSchema(malformedData, checkers)).to.be.false;
+
+    // But if we remove the invalid fields, it should work
+    const cleanData = { valid_field: 'test' };
+    expect(isSchema(cleanData, checkers)).to.be.true;
+    expect(baseSchema(cleanData, checkers)).to.deep.equal({ valid_field: 'test' });
+  });
+});
+
+describe('setExtras', function () {
+  it('returns empty object when thisExtras is undefined and extras is empty', function () {
+    const result = setExtras(undefined, {});
+    expect(result).to.deep.equal({});
+  });
+
+  it('returns empty object when both thisExtras and extras have no query or headers', function () {
+    const result = setExtras({}, {});
+    expect(result).to.deep.equal({});
+  });
+
+  it('includes query when only extras has query', function () {
+    const result = setExtras(undefined, { query: { key: 'value' } });
+    expect(result.query).to.deep.equal({ key: 'value' });
+    expect(result.headers).to.be.undefined;
+  });
+
+  it('includes query when only thisExtras has query', function () {
+    const result = setExtras({ query: { key: 'value' } }, {});
+    expect(result.query).to.deep.equal({ key: 'value' });
+  });
+
+  it('merges query from both thisExtras and extras, extras overrides thisExtras', function () {
+    const result = setExtras(
+      { query: { a: 'from-this', b: 'from-this' } },
+      { query: { b: 'from-extras', c: 'from-extras' } }
+    );
+    expect(result.query).to.deep.equal({ a: 'from-this', b: 'from-extras', c: 'from-extras' });
+  });
+
+  it('includes headers when only extras has headers', function () {
+    const result = setExtras(undefined, { headers: { Authorization: 'Bearer token' } });
+    expect(result.headers).to.deep.equal({ Authorization: 'Bearer token' });
+    expect(result.query).to.be.undefined;
+  });
+
+  it('includes headers when only thisExtras has headers', function () {
+    const result = setExtras({ headers: { Authorization: 'Bearer token' } }, {});
+    expect(result.headers).to.deep.equal({ Authorization: 'Bearer token' });
+  });
+
+  it('merges headers from both thisExtras and extras, extras overrides thisExtras', function () {
+    const result = setExtras(
+      { headers: { Accept: 'text/html', Authorization: 'old-token' } },
+      { headers: { Authorization: 'new-token', 'X-Custom': 'value' } }
+    );
+    expect(result.headers).to.deep.equal({ Accept: 'text/html', Authorization: 'new-token', 'X-Custom': 'value' });
+  });
+
+  it('merges both query and headers together', function () {
+    const result = setExtras(
+      { query: { page: '1' }, headers: { Accept: 'application/json' } },
+      { query: { limit: '10' }, headers: { Authorization: 'Bearer token' } }
+    );
+    expect(result.query).to.deep.equal({ page: '1', limit: '10' });
+    expect(result.headers).to.deep.equal({ Accept: 'application/json', Authorization: 'Bearer token' });
+  });
+
+  it('does not include query key when neither side has it', function () {
+    const result = setExtras(
+      { headers: { Accept: 'application/json' } },
+      { headers: { Authorization: 'Bearer token' } }
+    );
+    expect(result).not.to.have.property('query');
+  });
+
+  it('does not include headers key when neither side has it', function () {
+    const result = setExtras(
+      { query: { page: '1' } },
+      { query: { limit: '10' } }
+    );
+    expect(result).not.to.have.property('headers');
+  });
+
+  it('does not mutate the inputs', function () {
+    const thisExtras = { query: { a: '1' } };
+    const extras = { query: { b: '2' } };
+    setExtras(thisExtras, extras);
+    expect(thisExtras).to.deep.equal({ query: { a: '1' } });
+    expect(extras).to.deep.equal({ query: { b: '2' } });
+  });
+});
+
+describe('query', function () {
+  it('appends nothing when both classExtras and thisExtras are undefined', function () {
+    const out: Array<string> = [];
+    query(out, undefined, undefined, []);
+    expect(out).to.deep.equal([]);
+  });
+
+  it('appends nothing when both classExtras and thisExtras have no query', function () {
+    const out: Array<string> = [];
+    query(out, {}, {}, []);
+    expect(out).to.deep.equal([]);
+  });
+
+  it('appends key=value from classExtras.query', function () {
+    const out: Array<string> = [];
+    query(out, { query: { key: 'value' } }, undefined, []);
+    expect(out).to.deep.equal(['key=value']);
+  });
+
+  it('appends key=value from thisExtras.query', function () {
+    const out: Array<string> = [];
+    query(out, undefined, { query: { key: 'value' } }, []);
+    expect(out).to.deep.equal(['key=value']);
+  });
+
+  it('thisExtras.query overrides classExtras.query for the same key', function () {
+    const out: Array<string> = [];
+    query(out, { query: { key: 'class-value' } }, { query: { key: 'this-value' } }, []);
+    expect(out).to.include('key=this-value');
+    expect(out).not.to.include('key=class-value');
+  });
+
+  it('merges keys from both classExtras and thisExtras', function () {
+    const out: Array<string> = [];
+    query(out, { query: { a: '1' } }, { query: { b: '2' } }, []);
+    expect(out).to.include('a=1');
+    expect(out).to.include('b=2');
+  });
+
+  it('skips forbidden keys', function () {
+    const out: Array<string> = [];
+    query(out, { query: { skip: 'me', keep: 'this' } }, undefined, ['skip']);
+    expect(out).to.deep.equal(['keep=this']);
+  });
+
+  it('skips all entries when all keys are forbidden', function () {
+    const out: Array<string> = [];
+    query(out, { query: { a: '1', b: '2' } }, undefined, ['a', 'b']);
+    expect(out).to.deep.equal([]);
+  });
+
+  it('URI-encodes special characters in keys and values', function () {
+    const out: Array<string> = [];
+    query(out, { query: { 'key with spaces': 'value&special=chars' } }, undefined, []);
+    expect(out).to.deep.equal(['key%20with%20spaces=value%26special%3Dchars']);
+  });
+
+  it('preserves existing entries in the out array', function () {
+    const out: Array<string> = ['existing=entry'];
+    query(out, { query: { new: 'entry' } }, undefined, []);
+    expect(out).to.deep.equal(['existing=entry', 'new=entry']);
+  });
+});
+
+describe('headers', function () {
+  it('returns the same Headers object passed in', function () {
+    const out = new Headers();
+    const result = headers(out, undefined, undefined, []);
+    expect(result).to.equal(out);
+  });
+
+  it('returns unchanged Headers when both classExtras and thisExtras are undefined', function () {
+    const out = new Headers();
+    headers(out, undefined, undefined, []);
+    expect(Array.from(out.entries())).to.deep.equal([]);
+  });
+
+  it('returns unchanged Headers when both classExtras and thisExtras have no headers', function () {
+    const out = new Headers();
+    headers(out, {}, {}, []);
+    expect(Array.from(out.entries())).to.deep.equal([]);
+  });
+
+  it('sets headers from classExtras.headers', function () {
+    const out = new Headers();
+    headers(out, { headers: { 'X-Custom': 'value' } }, undefined, []);
+    expect(out.get('x-custom')).to.equal('value');
+  });
+
+  it('sets headers from thisExtras.headers', function () {
+    const out = new Headers();
+    headers(out, undefined, { headers: { 'X-Custom': 'value' } }, []);
+    expect(out.get('x-custom')).to.equal('value');
+  });
+
+  it('thisExtras.headers overrides classExtras.headers for the same key', function () {
+    const out = new Headers();
+    headers(out, { headers: { Authorization: 'class-token' } }, { headers: { Authorization: 'this-token' } }, []);
+    expect(out.get('authorization')).to.equal('this-token');
+  });
+
+  it('merges keys from both classExtras and thisExtras', function () {
+    const out = new Headers();
+    headers(out, { headers: { Accept: 'application/json' } }, { headers: { Authorization: 'Bearer token' } }, []);
+    expect(out.get('accept')).to.equal('application/json');
+    expect(out.get('authorization')).to.equal('Bearer token');
+  });
+
+  it('skips forbidden keys', function () {
+    const out = new Headers();
+    headers(out, { headers: { 'Content-Type': 'text/plain', 'X-Custom': 'value' } }, undefined, ['Content-Type']);
+    expect(out.get('content-type')).to.be.null;
+    expect(out.get('x-custom')).to.equal('value');
+  });
+
+  it('skips all entries when all keys are forbidden', function () {
+    const out = new Headers();
+    headers(out, { headers: { 'Content-Type': 'text/plain' } }, undefined, ['Content-Type']);
+    expect(Array.from(out.entries())).to.deep.equal([]);
+  });
+
+  it('preserves existing headers on the Headers object', function () {
+    const out = new Headers({ 'X-Pre-Existing': 'pre-existing' });
+    headers(out, { headers: { 'X-New': 'new' } }, undefined, []);
+    expect(out.get('x-pre-existing')).to.equal('pre-existing');
+    expect(out.get('x-new')).to.equal('new');
+  });
+});
+
+describe('getLoader', function () {
+  it('returns blob loader when contentType is null', function () {
+    const classLoaders: LoaderMap = new Map();
+    const loader = getLoader(null, undefined, undefined, classLoaders);
+    // Verify it's the blob loader by calling it with a mock Response
+    const mockBlob = new Blob(['test']);
+    const mockResponse = new Response(mockBlob);
+    return loader(mockResponse).then(result => {
+      expect(result).to.be.instanceOf(Blob);
+    });
+  });
+
+  // Cases where classArgsLoader is undefined.
+
+  it('returns loader from loaders map when content type matches', function () {
+    const expectedResult = { parsed: true };
+    const customLoader: LoaderFunction = (_response) => Promise.resolve(expectedResult);
+    const loaders: LoaderMap = new Map([['application/json', customLoader]]);
+    const classLoaders: LoaderMap = new Map();
+    const loader = getLoader('application/json', loaders, undefined, classLoaders);
+    expect(loader).to.equal(customLoader);
+  });
+
+  it('returns loader from classLoaders when not in others', function () {
+    const expectedResult = { parsed: true };
+    const classLoader: LoaderFunction = (_response) => Promise.resolve(expectedResult);
+    const loaders: LoaderMap = new Map();
+    const classLoaders: LoaderMap = new Map([['application/json', classLoader]]);
+    const loader = getLoader('application/json', loaders, undefined, classLoaders);
+    expect(loader).to.equal(classLoader);
+  });
+
+  it('loaders map takes precedence over classLoaders', function () {
+    const loaderResult = { source: 'loaders' };
+    const classLoaderResult = { source: 'classLoaders' };
+    const customLoader: LoaderFunction = (_response) => Promise.resolve(loaderResult);
+    const classLoader: LoaderFunction = (_response) => Promise.resolve(classLoaderResult);
+    const loaders: LoaderMap = new Map([['application/json', customLoader]]);
+    const classLoaders: LoaderMap = new Map([['application/json', classLoader]]);
+    const loader = getLoader('application/json', loaders, undefined, classLoaders);
+    expect(loader).to.equal(customLoader);
+  });
+
+  it('returns blob loader when content type is unknown in both maps', function () {
+    const loaders: LoaderMap = new Map([['application/json', (_r) => Promise.resolve({})]]);
+    const classLoaders: LoaderMap = new Map([['text/plain', (_r) => Promise.resolve({})]]);
+    const loader = getLoader('text/html', loaders, undefined, classLoaders);
+    const mockResponse = new Response(new Blob(['test']));
+    return loader(mockResponse).then(result => {
+      expect(result).to.be.instanceOf(Blob);
+    });
+  });
+
+  it('returns blob loader when loaders is undefined and content type not in classLoaders', function () {
+    const classLoaders: LoaderMap = new Map([['application/json', (_r) => Promise.resolve({})]]);
+    const loader = getLoader('text/html', undefined, undefined, classLoaders);
+    const mockResponse = new Response(new Blob(['test']));
+    return loader(mockResponse).then(result => {
+      expect(result).to.be.instanceOf(Blob);
+    });
+  });
+
+  it('falls through to classLoaders when loaders is undefined', function () {
+    const classLoader: LoaderFunction = (_response) => Promise.resolve('class-result');
+    const classLoaders: LoaderMap = new Map([['text/plain', classLoader]]);
+    const loader = getLoader('text/plain', undefined, undefined, classLoaders);
+    expect(loader).to.equal(classLoader);
+  });
+
+  it('matches content type case-insensitively (lowercased)', function () {
+    const customLoader: LoaderFunction = (_response) => Promise.resolve({});
+    const loaders: LoaderMap = new Map([['application/json', customLoader]]);
+    const classLoaders: LoaderMap = new Map();
+    // Content type with mixed case should be lowercased before lookup
+    const loader = getLoader('Application/JSON', loaders, undefined, classLoaders);
+    expect(loader).to.equal(customLoader);
+  });
+
+  it('returns the loader that calls response.blob() for the blob loader', function () {
+    const classLoaders: LoaderMap = new Map();
+    const loader = getLoader(null, undefined, undefined, classLoaders);
+    const mockBlob = new Blob(['hello']);
+    const mockResponse = new Response(mockBlob);
+    return loader(mockResponse).then(result => {
+      expect(result).to.be.instanceOf(Blob);
+    });
+  });
+
+  it('returns loader content type has matching charset', function () {
+    const expectedResult = { parsed: true };
+    const customLoader: LoaderFunction = (_response) => Promise.resolve(expectedResult);
+    const loaders: LoaderMap = new Map([['application/json; charset=utf-8', customLoader]]);
+    const classLoaders: LoaderMap = new Map();
+    let loader = getLoader('application/json; charset=utf-8', loaders, undefined, classLoaders);
+    expect(loader).to.equal(customLoader);
+    loader = getLoader('application/JSON ; charset=UTF-8', loaders, undefined, classLoaders);
+    expect(loader).to.equal(customLoader);
+    loader = getLoader('application/JSON;charset=UTF-8', loaders, undefined, classLoaders);
+    expect(loader).to.equal(customLoader);
+  });
+
+  // Cases where classArgsLoader is defined.
+
+  it('returns loader from classArgsLoaders when not in loaders', function () {
+    const unexpectedResult = { parsed: false };
+    const expectedResult = { parsed: true };
+    const classLoader: LoaderFunction = (_response) => Promise.resolve(unexpectedResult);
+    const classArgsLoader: LoaderFunction = (_response) => Promise.resolve(expectedResult);
+    const loaders: LoaderMap = new Map();
+    const classArgsLoaders: LoaderMap = new Map([['application/json', classArgsLoader]]);
+    const classLoaders: LoaderMap = new Map([['application/json', classLoader]]);
+    const loader = getLoader('application/json', loaders, classArgsLoaders, classLoaders);
+    expect(loader).to.equal(classArgsLoader);
+  });
+
+  it('loaders map takes precedence over classLoaders', function () {
+    const loaderResult = { source: 'loaders' };
+    const classLoaderResult = { source: 'classLoaders' };
+    const customLoader: LoaderFunction = (_response) => Promise.resolve(loaderResult);
+    const classArgsLoader: LoaderFunction = (_response) => Promise.resolve(classLoaderResult);
+    const classLoader: LoaderFunction = (_response) => Promise.resolve(classLoaderResult);
+    const loaders: LoaderMap = new Map([['application/json', customLoader]]);
+    const classLoaders: LoaderMap = new Map([['application/json', classLoader]]);
+    const classArgsLoaders: LoaderMap = new Map([['application/json', classArgsLoader]]);
+    const loader = getLoader('application/json', loaders, classArgsLoaders, classLoaders);
+    expect(loader).to.equal(customLoader);
+  });
+
+  it('returns blob loader when content type is unknown in all maps', function () {
+    const loaders: LoaderMap = new Map([['application/json', (_r) => Promise.resolve({})]]);
+    const classArgsLoaders: LoaderMap = new Map([['application/xml', (_r) => Promise.resolve({})]]);
+    const classLoaders: LoaderMap = new Map([['text/plain', (_r) => Promise.resolve({})]]);
+    const loader = getLoader('text/html', loaders, classArgsLoaders, classLoaders);
+    const mockResponse = new Response(new Blob(['test']));
+    return loader(mockResponse).then(result => {
+      expect(result).to.be.instanceOf(Blob);
+    });
+  });
+
+  it('returns blob loader when loaders is undefined and content type not in class(Args)Loaders', function () {
+    const classLoaders: LoaderMap = new Map([['application/json', (_r) => Promise.resolve({})]]);
+    const classArgsLoaders: LoaderMap = new Map([['application/xml', (_r) => Promise.resolve({})]]);
+    const loader = getLoader('text/html', undefined, classArgsLoaders, classLoaders);
+    const mockResponse = new Response(new Blob(['test']));
+    return loader(mockResponse).then(result => {
+      expect(result).to.be.instanceOf(Blob);
+    });
+  });
+
+  it('falls through to classArgsLoaders when loaders is undefined', function () {
+    const classArgsLoader: LoaderFunction = (_response) => Promise.resolve('args-result');
+    const classLoader: LoaderFunction = (_response) => Promise.resolve('class-result');
+    const classArglLoaders: LoaderMap = new Map([['text/plain', classArgsLoader]]);
+    const classLoaders: LoaderMap = new Map([['text/plain', classLoader]]);
+    const loader = getLoader('text/plain', undefined, classArglLoaders, classLoaders);
+    expect(loader).to.equal(classArgsLoader);
+  });
+
+  it('matches content type case-insensitively (lowercased)', function () {
+    const customLoader: LoaderFunction = (_response) => Promise.resolve({});
+    const loaders: LoaderMap = new Map([['application/json', customLoader]]);
+    const classLoaders: LoaderMap = new Map();
+    // Content type with mixed case should be lowercased before lookup
+    const loader = getLoader('Application/JSON', loaders, classLoaders, classLoaders);
+    expect(loader).to.equal(customLoader);
+  });
+});

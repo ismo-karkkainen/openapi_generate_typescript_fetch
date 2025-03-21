@@ -1,0 +1,542 @@
+<%=
+require 'uri'
+Gen.output.config = Gen.x.cfg['ts_indentation']
+Gen.x.generator_info
+%>
+
+import type {<%= %w[String2String CallExtras EncoderFunction EncodedBodyType].concat(Gen.x.schemas.import_types).join(', ') %>} from './schemas.d.ts';
+import { <%= %w[isObject isString jsonEncode].concat(Gen.x.schemas.imports).join(', ') %>} from './schemas.js';
+import type {AllParameters, Shared} from './shared.d.ts';
+import { <%= %w[shared].concat(Gen.x.shared.functions).join(', ') %> } from './shared.js';
+import type {LoaderFunction, LoaderMap} from './helpers.d.ts';
+import {setExtras, query, headers, getLoader} from './helpers.js';
+
+// Used as base classes for per-operation exception classes.
+export class RequestError extends Error {
+    constructor(msg: string) {
+        super(msg);
+    }
+}
+
+export class ResponseError extends Error {
+    response: Response;
+    body?: any;
+    constructor(msg: string, r: Response, b?: any) {
+        super(msg);
+        this.response = r;
+        if (b)
+            this.body = b;
+    }
+}
+
+// Classes can return this to act as fetch setup.
+export type UrlRequestInit = {
+  url: string;
+  ri: RequestInit;
+}
+
+export type RequestInitModifier = (ur: UrlRequestInit) => void;
+
+export function isUrlRequestInit(x: unknown): x is UrlRequestInit {
+  if (isObject(x)) {
+    const a: any = x;
+    return a.url !== undefined && a.ri !== undefined && isString(a.url) && isObject(a.ri);
+  }
+  return false;
+}
+
+export type PrepareArgs = {
+  ignoreMismatches?: boolean;
+  createAbortSignal?: boolean;
+};
+
+<%=
+out = []
+def known
+  {
+    'application/json' => 'scApplicationJson',
+    'application/xml' => 'scApplicationXml',
+    'text/plain' => 'scTextPlain',
+    'text/xml' => 'scTextXml',
+    'application/json; charset=utf-8' => 'scApplicationJsonUtf8',
+    'application/xml; charset=utf-8' => 'scApplicationXmlUtf8',
+    'text/plain; charset=utf-8' => 'scTextPlainUtf8',
+    'text/xml; charset=utf-8' => 'scTextXmlUtf8',
+    'application/octet-stream' => 'scApplicationOctetStream',
+    'GET' => 'scGET',
+    'POST' => 'scPOST',
+    'PUT' => 'scPUT',
+    'DELETE' => 'scDELETE',
+    'PATCH' => 'scPATCH',
+    'content-type' => 'scContentType',
+    'content-length' => 'scContentLength'
+  }
+end
+
+def string_const(value)
+  k = known()
+  k.fetch(value.downcase, k.fetch(value.upcase, "'#{value}'"))
+end
+known().each do |str, con|
+  out.push("const #{con} = '#{str}';")
+end
+Gen.output.join(out)
+%>
+
+const defaultLoaders: Array<[string, LoaderFunction]> = [
+  [<%= string_const('application/json') %>, (response: Response) => response.json()],
+  [<%= string_const('application/xml') %>, (response: Response) => response.text()],
+  [<%= string_const('text/xml') %>, (response: Response) => response.text()],
+  [<%= string_const('text/plain') %>, (response: Response) => response.text()],
+  [<%= string_const('application/json; charset=utf-8') %>, (response: Response) => response.json()],
+  [<%= string_const('application/xml; charset=utf-8') %>, (response: Response) => response.text()],
+  [<%= string_const('text/xml; charset=utf-8') %>, (response: Response) => response.text()],
+  [<%= string_const('text/plain; charset=utf-8') %>, (response: Response) => response.text()],
+  [<%= string_const('application/octet-stream') %>, (response: Response) => response.blob()]
+];
+
+export type ResponseUnexpected = {
+  body?: any;
+}
+
+// Call classes for each operationId.
+
+<%=
+# Book-keeping for:
+# parameter name and type mapped to classes that use it.
+paramtype2oos = {}
+types2info = {}
+out = []
+Gen.doc['paths'].each do |path, path_item_object|
+  oos = OpenAPISourceTools::ApiObjects.operation_objects(path_item_object)
+  oos.each do |method, operation_object|
+    clsName = LuckyCase.pascal_case(operation_object['operationId'])
+    clsRespName = "#{clsName}Response"
+    clsReqError = "#{clsName}Error"
+    clsRespError = "#{clsRespName}Error"
+    operation_object[:name] = clsName
+    operation_object[:resp_name] = clsRespName
+    operation_object[:req_error] = clsReqError
+    operation_object[:resp_error] = clsRespError
+    paramless = operation_object[:parameterless]
+    unless paramless
+      # Book-keeping of classes that use the specific parameter name and type combination.
+      operation_object[:paraschemas].each do |ps|
+        key = "#{ps[:param][:name]}:#{ps[:schema][:name]}"
+        paramtype2oos[key] = [] unless paramtype2oos.key?(key)
+        paramtype2oos[key].push(operation_object)
+      end
+    end
+    req_body = operation_object['requestBody']
+    has_encoder = false
+    default_encoder = nil
+    if req_body && req_body['content']
+      req_body['content'].each do |media_type, mto|
+        has_encoder = true
+        default_encoder = 'jsonEncode' if media_type.downcase == 'application/json'
+      end
+    end
+    operation_object[:request] = {
+      has_encoder: has_encoder
+    }
+    # Loop over all reponses and get the references and status codes.
+    # That will gather all types and codes for the response type.
+    responses = operation_object['responses'] || {}
+    response_decls = []
+    status_decls = []
+    body_decls = Set.new
+    code2content = {}
+    operation_object[:responses] = { code2content: code2content }
+    responses.each do |status_code, response_object|
+      response_object = Gen.h.dereference(response_object)
+      code2content[status_code] = {
+        code: status_code,
+        cond: status_code.downcase == 'default' ? nil : Gen.h.response_code_condition(status_code, var: 'response.status'),
+        content: {},
+        status_var: "c#{status_code.downcase == 'default' ? 'Other' : status_code.downcase}"
+      }
+      # Build status code to content-type to schema mapping to find out the
+      # isX and baseX functions.
+      response_types = {}
+      if response_object['content']
+        response_object['content'].each do |media_type, mto|
+          code2content[status_code][:content][media_type.downcase] = { mto: mto }
+          if response_types.key?(mto[:decoded][:name])
+            code2content[status_code][:content][media_type.downcase][:rt] = response_types[mto[:decoded][:name]]
+            next
+          end
+          rt = {
+            type: mto[:decoded],
+            name: LuckyCase.camel_case(mto[:decoded][:name])
+          }
+          rt[:name] = 'body' if rt[:name] == 'any'
+          rt[:decl] = "#{rt[:name]}?: #{rt[:type][:name]};"
+          response_types[mto[:decoded][:name]] = rt
+          code2content[status_code][:content][media_type.downcase][:rt] = rt
+          body_decls.add(rt[:decl])
+        end
+      end
+      if response_types.empty?
+        rt = {
+          type: response_object,
+          name: LuckyCase.camel_case(response_object[:name]),
+        }
+        rt[:decl] = "#{rt[:name]}?: #{rt[:type][:name]};"
+        response_types[rt[:name]] = rt
+      end
+      types = response_types.keys.sort!.join('|')
+      typename = "#{clsRespName}#{LuckyCase.pascal_case(status_code.downcase)}"
+      response_object[:response] = {
+        types: response_types,
+        name: typename
+      }
+      if types2info.key?(types)
+        rts = types2info[types][:response_types]
+        s = <<EOB
+export type #{typename} = #{types2info[types][:name]};
+#{rts.keys.sort!.map { |k| "// #{rts[k][:decl]}" }.join("\n")}
+EOB
+      else
+        types2info[types] = {
+          response_types: response_types,
+          name: typename
+        }
+        s = <<EOB
+export type #{typename} = {
+  #{response_types.keys.sort!.map { |k| response_types[k][:decl] }.join("\n  ")}
+}
+EOB
+      end
+      response_decls.push(s)
+      sd = {
+        name: "c#{status_code == 'default' ? 'Other' : status_code.downcase}",
+        type: typename,
+        code: status_code
+      }
+      sd[:decl] = "#{sd[:name]}?: #{sd[:type]};"
+      status_decls.push(sd)
+    end
+    unless responses.key?('default')
+      sd = {
+        name: 'cOther',
+        type: "ResponseUnexpected"
+      }
+      sd[:decl] = "#{sd[:name]}?: #{sd[:type]};"
+      status_decls.push(sd)
+    end
+    operation_object[:status_decls] = status_decls
+    ps = operation_object[:paraschemas].map { |x| x[:param] }
+    path_params = ps.select { |p| p['in'] == 'path' }.sort! do |a, b|
+      d = b['name'].length <=> a['name'].length
+      d.zero? ? a['name'] <=> b['name'] : d
+    end
+    prepared_path = path
+    path_params.each do |pp|
+      prepared_path = prepared_path.gsub("{#{pp['name']}}", "${cand.#{pp[:name]}}");
+    end
+    query_params = ps.select { |p| p['in'] == 'query' }
+    query_func = query_params.map { |qp|
+      "if (cand.#{qp[:name]} !== undefined) q.push(`#{URI.encode_uri_component(qp['name'])})=${encodeURIComponent(cand.#{qp[:name]})}`);"
+    }.join("\n")
+    header_params = ps.select { |p| p['in'] == 'header' }
+    header_func = header_params.map { |hp|
+      "if (cand.#{hp[:name]} !== undefined) headers.set('#{hp['name']}', cand.#{hp[:name]}.toString());"
+    }.join("\n")
+    encode = '// No body encoding.'
+    if has_encoder
+      body_encodings = req_body[:body_encodings]
+      encode = <<EOB
+    static body2mediaTypes: Map<string, Array<string>> = new Map([
+      #{body_encodings.keys.sort!.map do |k|
+        mts = (body_encodings[k] || Set.new).to_a.sort!
+        "[#{string_const(k)}, [ #{mts.map { |mt| string_const(mt) }.join(', ')} ] ]"
+      end.join(",\n      ")}
+    ]);
+    static allBodyMediaTypes: Array<string> = [
+      #{body_encodings.values.map {|mt| mt.to_a }.flatten.uniq.sort!.map { |mt| string_const(mt) }.join(', ')}
+    ];
+    private encoderResult(cand: #{operation_object[:args_name]}): [EncodedBodyType, string, number, String2String] {
+      const encoder = this.encoder || #{clsName}.encoder || shared.encoder;
+      if (encoder === null) {
+        throw new #{clsReqError}('#{clsName} no request body encoder in instance, class, nor shared.');
+      }
+      let allowedTypes: Array<string> = [];
+      let src: #{req_body[:body_types].key?('any') ? 'any' : req_body[:body_types].keys.sort!.join('|')}|undefined;
+      let bname: string = '';
+      #{req_body[:body_types].keys.sort!.map { |k|
+        body_name = req_body[:body_types][k][:body_name]
+        s = <<EOC
+      if (cand.#{body_name} !== undefined) {
+        allowedTypes = #{clsName}.body2mediaTypes.get('#{body_name}') || [];
+        src = cand.#{body_name};
+        bname = '#{body_name}';
+      }
+EOC
+        s
+      }.join("else\n")}
+      #{req_body[:body_types].keys.empty? ? '' : 'else '}if (cand.body !== undefined) {
+        allowedTypes = #{clsName}.allBodyMediaTypes;
+        src = cand.body;
+        bname = 'body';
+      }
+      if (src === undefined)
+        throw new #{clsReqError}('#{clsName} no body present in request parameters for encoding.');
+      const [body, contentType, contentLength, headers] = encoder!(src);
+      if (!allowedTypes!.includes(contentType)) {
+        const ct = contentType.split(';')[0].trim();
+        if (!allowedTypes!.includes(ct))
+          throw new #{clsReqError}(`#{clsName} encoded content-type ${contentType} is not allowed for ${bname}. Allowed: ${allowedTypes.join(', ')}`);
+      }
+      return [body, contentType, contentLength, headers];
+    }
+
+    private encodeBody(cand: #{operation_object[:args_name]}, out: UrlRequestInit): void {
+      if (cand.encoded !== undefined) {
+        // Content-type and content-length headers are expected to have been added to extras.
+        out.ri.body = cand.encoded;
+        return;
+      }
+      const [body, contentType, contentLength, headers] = this.encoderResult(cand);
+      out.ri.body = body;
+      const hdrs: Headers = out.ri.headers as Headers;
+      hdrs.set(#{string_const('content-type')}, contentType);
+      hdrs.set(#{string_const('content-length')}, contentLength.toString());
+      for (const key in headers) {
+        hdrs.set(key.toLowerCase(), headers[key]);
+      }
+    }
+
+EOB
+    end
+    status_order = code2content.keys.sort! do |a, b|
+      ac = code2content[a][:cond]
+      bc = code2content[b][:cond]
+      if ac.nil?
+        1
+      elsif bc.nil?
+        -1
+      else
+        d = ac.length <=> bc.length
+        d.zero? ? ac <=> bc : d
+      end
+    end
+    operation_object[:responses][:status_order] = status_order
+    body_check = status_order.map do |key|
+      info = code2content[key]
+      stmt = info[:cond].nil? ? '' : "if (#{info[:cond]})"
+      if info[:content].empty?
+        s = <<EOB
+#{stmt} {
+  this.#{info[:status_var]} = {};
+}
+EOB
+      else
+        s = <<EOB
+#{stmt} {
+  #{info[:content].keys.sort!.map do |ct|
+    mr = info[:content][ct]
+    cc = <<EOC
+    if (contentType.startsWith(#{string_const(ct)})) {
+      if (#{mr[:rt][:type][:is]}(rawBody)) {
+        this.#{mr[:rt][:name]} = #{mr[:rt][:type][:base]}(rawBody);
+        this.#{info[:status_var]} = { #{mr[:rt][:name]}: this.#{mr[:rt][:name]} };
+      } else this.mismatch = 2;
+    }
+EOC
+    cc
+  end.push('this.mismatch = 1;').join("else\n")}
+}
+EOB
+      end
+      s
+    end.join("\nelse\n")
+    unless code2content.key?('default')
+      body_check += " else this.mismatch = 2;"
+    end
+    Gen.x.callclasses.classes.push(clsName)
+    Gen.x.callclasses.types.push("#{clsRespName}Args")
+    Gen.x.callclasses.classes.push(clsRespName)
+    Gen.x.callclasses.classes.push(clsReqError)
+    Gen.x.callclasses.classes.push(clsRespError)
+    c = <<EOB
+// #{path} #{method.upcase}
+export class #{clsName} {
+    // Class-level fall-back values.
+    #{paramless ? '// No parameters.' : "static params: Partial<#{operation_object[:args_name]}> = {};"}
+    static defaultRequestInit: RequestInit = {};
+    static extras: CallExtras = {};
+    static modifier: RequestInitModifier|null|undefined;
+    static serverUrl: string|null|undefined;
+    #{has_encoder ? "static encoder: EncoderFunction|null#{default_encoder.nil? ? '' : " = #{default_encoder}"};" : '// No body encoder.'}
+
+    #{paramless ? '// No parameters.' : "params: Partial<#{operation_object[:args_name]}>;"}
+    extras?: CallExtras;
+    modifier?: RequestInitModifier|null;
+    serverUrl?: string;
+    #{has_encoder ? "encoder?: EncoderFunction|null;" : '// No body encoder.'}
+
+    static abortSignalable: boolean|undefined;
+
+    abortSignalable?: boolean;
+    abortController: AbortController | null;
+
+    urlRequestInit?: UrlRequestInit;
+
+    constructor(#{paramless ? '' : "params?: Partial<#{operation_object[:args_name]}>"}) {
+        #{paramless ? '// No parameters.' : "this.params = params || {};"}
+        this.abortController = null;
+    }
+
+    // Methods to set instance values and return this so calls can be chained.
+
+    setExtras(extras: CallExtras): #{clsName} {
+        this.extras = setExtras(this.extras, extras);
+        return this;
+    }
+
+    setModifier(modifier: RequestInitModifier|null): #{clsName} {
+        this.modifier = modifier;
+        return this;
+    }
+
+    setServerUrl(serverUrl: string): #{clsName} {
+        this.serverUrl = serverUrl;
+        return this;
+    }
+#{has_encoder ? "\n    setEncoder(encoder: EncoderFunction|null): #{clsName} { this.encoder = encoder; return this; }" : ''}
+
+    private path(cand: #{operation_object[:args_name] || 'object'}): string {
+      return `${this.serverUrl || #{clsName}.serverUrl || shared.serverUrl}#{prepared_path}`;
+    }
+
+    static queryParamNames: Array<string> = [ #{query_params.map { |qp| "'#{qp['name']}'" }.sort!.join(', ')} ];
+    private query(cand: #{operation_object[:args_name] || 'object'}): string {
+        const q: Array<string> = [];
+        #{query_func}
+        query(q, #{clsName}.extras, this.extras, #{clsName}.queryParamNames);
+        if (q.length)
+            return `?${q.join('&')}`;
+        return '';
+    }
+
+    static headerParamNames: Array<string> = [ #{header_params.map { |hp| "'#{hp['name']}'" }.sort!.join(', ')} ];
+    private headers(cand: #{operation_object[:args_name] || 'object'}): Headers {
+        const hdrs = new Headers();
+        #{header_func}
+        return headers(hdrs, #{clsName}.extras, this.extras, #{clsName}.headerParamNames);
+    }
+
+    private addAbortController(force: boolean) {
+        const signalable = force || (this.abortController !== null) || ((this.abortSignalable !== undefined) ? this.abortSignalable : ((#{clsName}.abortSignalable !== undefined) ? #{clsName}.abortSignalable : shared.abortSignalable));
+        if (!signalable)
+            return;
+        if (this.abortController === null) {
+            this.abortController = new AbortController();
+        }
+        if (this.urlRequestInit!.ri.signal === undefined)
+            this.urlRequestInit!.ri.signal = this.abortController.signal;
+    }
+
+    #{encode}
+    prepare({ ignoreMismatches = false, createAbortSignal = false }: PrepareArgs = {}): UrlRequestInit {
+        const cand = #{paramless ? '{}' : "{ ...#{operation_object[:shared]}(), ...#{clsName}.params, ...this.params! }"};
+        #{paramless ? '// cand is ok.' : "
+        if (!#{operation_object[:args_is]}(cand) && !ignoreMismatches) {
+            throw new #{clsReqError}('#{clsName} parameters do not conform to #{operation_object[:args_name]} type.');
+        }"}
+        const out: UrlRequestInit = {
+            url: this.path(cand as #{operation_object[:args_name] || 'object'}) + this.query(cand as #{operation_object[:args_name] || 'object'}),
+            ri: {
+                ...#{clsName}.defaultRequestInit,
+                method: #{string_const(method)},
+                headers: this.headers(cand as #{operation_object[:args_name] || 'object'}),
+            },
+        };
+        #{has_encoder ? "this.encodeBody(cand as #{operation_object[:args_name] || 'object'}, out);" : '// No body encoding.'}
+        this.urlRequestInit = out;
+        this.addAbortController(createAbortSignal);
+        const mod = (this.modifier !== undefined) ? this.modifier : ((#{clsName}.modifier !== undefined) ? #{clsName}.modifier : shared.modifier);
+        if (mod !== null) {
+            mod(out);
+        }
+        return out;
+    }
+
+    async call(): Promise<#{clsRespName}> {
+        const ur = this.urlRequestInit || this.prepare();
+        return #{clsRespName}.obtain({ caller: this });
+    }
+}
+
+// User can use prepare, fetch etc. themselves, then pass to obtain.
+
+export type #{clsRespName}Args = {
+    caller: #{clsName};
+    response?: Response;
+    loaders?: LoaderMap; // Content-type names are lower case.
+    throwNon2xx?: boolean;
+    throwBodyMismatch?: boolean;
+};
+
+export class #{clsReqError} extends RequestError {
+    constructor(msg: string) {
+        super(msg);
+    }
+}
+
+export class #{clsRespError} extends ResponseError {
+    caller: #{clsName};
+    constructor(msg: string, c: #{clsName}, r: Response, b?: any) {
+        super(msg, r, b);
+        this.caller = c;
+    }
+};
+
+#{response_decls.join("\n")}
+
+export class #{clsRespName} {
+    static args: Partial<#{clsRespName}Args> = {};
+    static loaders: LoaderMap = new Map(defaultLoaders);
+
+    static async obtain(args: #{clsRespName}Args): Promise<#{clsRespName}> {
+        if (args.response === undefined) {
+            args.response = await fetch(args.caller.urlRequestInit!.url, args.caller.urlRequestInit!.ri);
+        }
+        args = { loaders: #{clsRespName}.loaders, ...#{clsRespName}.args, ...args };
+        let raw: any;
+        if (args.response!.body) {
+            const loader = getLoader(args.response!.headers.get(#{string_const('content-type')}), args.loaders, #{clsRespName}.args.loaders, #{clsRespName}.loaders);
+            raw = await loader(args.response!);
+        }
+        if (args.throwNon2xx && (args.response!.status < 200 || 300 <= args.response!.status)) {
+            throw new #{clsRespError}(`#{clsRespName} non-2xx response status ${args.response!.status}`, args.caller, args.response!, raw);
+        }
+        return new #{clsRespName}(args.response!, args.caller, raw, args.throwBodyMismatch);
+    }
+
+    response: Response;
+    caller: #{clsName};
+    #{status_decls.map { |sd| sd[:decl] }.join("\n")}
+    #{body_decls.to_a.sort!.join("\n")}
+    mismatch: number;
+
+    constructor(response: Response, caller: #{clsName}, rawBody?: any, throwBodyMismatch?: boolean) {
+        this.response = response;
+        this.caller = caller;
+        const contentType = (response.headers?.get(#{string_const('content-type')}) || '').toLowerCase();
+        this.mismatch = 0;
+        #{body_check}
+        if (this.mismatch == 1) {
+            throw new #{clsRespError}(`#{clsRespName} unexpected content-type: ${contentType}`, caller, response, rawBody);
+        }
+        if (this.mismatch == 2 && throwBodyMismatch) {
+            throw new #{clsRespError}('#{clsRespName} body mismatch', caller, response, rawBody);
+        }
+    }
+}
+EOB
+    out.push(c)
+  end
+end
+Gen.output.join(out)
+%>

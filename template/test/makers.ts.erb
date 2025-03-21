@@ -1,0 +1,1237 @@
+<%=
+Gen.output.config = Gen.x.cfg['ts_indentation']
+Gen.x.generator_info
+%>
+
+import type {<%= Gen.x.schemas.import_types.join(', ') %>} from '../src/schemas.d.ts';
+
+// Schema instance maker functions.
+
+const fakeEncoded = 'passes isEncodedBodyType';
+const failEncoded = 12345678;
+
+// Simple types.
+<%=
+def make_name(schema, kind, name)
+  array = schema[kind]
+  raise ArgumentError, "No array in schema for #{kind}" if array.nil?
+  suffix = LuckyCase.pascal_case(kind.to_s)
+  array.push("make#{LuckyCase.pascal_case(name)}#{suffix}#{array.size}")
+  Gen.x.makers.functions.push(array.last)
+end
+
+def integerMultiple(multiple)
+  rem = multiple.is_a?(Integer) ? 0 : (multiple - multiple.truncate)
+  if rem > 0
+    warn("multipleOf value #{multiple} is not an integer, may cause precision issues")
+    # Determine what to multiply with to get an integer.
+    mm = 1.0 / rem
+    if mm - mm.truncate == 0
+      multiple *= mm
+    else
+      warn("multipleOf value #{multiple} has problematic fractional part")
+      multiple *= mm.truncate # Will fail tests.
+    end
+  end
+  multiple
+end
+
+def surround(value, is_integer, multipleOf)
+  return [ nil, nil, nil ] if value.nil?
+  return [ value - multipleOf, value, value + multipleOf ] unless multipleOf.nil?
+  return [ value - 1, value, value + 1 ] if is_integer
+  value = Float.new(value) unless value.is_a?(Float)
+  [ value.prev_float, value, value.next_float ]
+end
+
+out = []
+todo = []
+sis = OpenAPIArrangement::Schema.dependencies_first(Gen.doc)
+sis.each do |si|
+  si.schema[:pass] = []
+  si.schema[:fail] = []
+  si.schema[:typefail] = []
+  case si.schema['type']
+  when 'object'
+    props = si.schema['properties'] || {}
+    pat_props = si.schema['patternProperties'] || {}
+    add_props = si.schema['additionalProperties']
+    if si.schema[:typefail].empty?
+      make_name(si.schema, :typefail, si.name)
+      out.push("export function #{si.schema[:typefail].last}(): #{si.name} { return 1 as unknown as #{si.name}; }")
+      make_name(si.schema, :typefail, si.name)
+      out.push("export function #{si.schema[:typefail].last}(): #{si.name} { return 'str' as unknown as #{si.name}; }")
+      make_name(si.schema, :typefail, si.name)
+      out.push("export function #{si.schema[:typefail].last}(): #{si.name} { return true as unknown as #{si.name}; }")
+      make_name(si.schema, :typefail, si.name)
+      out.push("export function #{si.schema[:typefail].last}(): #{si.name} { return null as unknown as #{si.name}; }")
+      make_name(si.schema, :typefail, si.name)
+      out.push("export function #{si.schema[:typefail].last}(): #{si.name} { return [] as unknown as #{si.name}; }")
+    end
+    if props.empty? && pat_props.empty? && (add_props.nil? || add_props == false)
+      make_name(si.schema, :pass, si.name)
+      out.push("export function #{si.schema[:pass].last}(): #{si.name} { return {} as #{si.name}; }")
+      if add_props == false
+        make_name(si.schema, :fail, si.name)
+        out.push("export function #{si.schema[:fail].last}(): #{si.name} { return { prop: 'invalid' } as #{si.name}; }")
+      end
+      next
+    end
+    unless si.schema.fetch('required', []).empty?
+      make_name(si.schema, :fail, si.name)
+      out.push("export function #{si.schema[:fail].last}(): #{si.name} { return {} as #{si.name}; }")
+    end
+    todo.push(si)
+  when 'array'
+    if si.schema[:typefail].empty?
+      make_name(si.schema, :typefail, si.name)
+      out.push("export function #{si.schema[:typefail].last}(): #{si.name} { return 1 as unknown as #{si.name}; }")
+      make_name(si.schema, :typefail, si.name)
+      out.push("export function #{si.schema[:typefail].last}(): #{si.name} { return 'str' as unknown as #{si.name}; }")
+      make_name(si.schema, :typefail, si.name)
+      out.push("export function #{si.schema[:typefail].last}(): #{si.name} { return true as unknown as #{si.name}; }")
+      make_name(si.schema, :typefail, si.name)
+      out.push("export function #{si.schema[:typefail].last}(): #{si.name} { return null as unknown as #{si.name}; }")
+      make_name(si.schema, :typefail, si.name)
+      out.push("export function #{si.schema[:typefail].last}(): #{si.name} { return {} as unknown as #{si.name}; }")
+    end
+    min_items = si.schema.fetch('minItems', 0)
+    max_items = si.schema['maxItems']
+    min_contains = si.schema.fetch('minContains', 0)
+    max_contains = si.schema['maxContains']
+    max_contains = nil if !max_items.nil? && !max_contains.nil? && max_items < max_contains
+    prefix = si.schema['prefixItems']
+    unless prefix.nil?
+      prefix = prefix[0...max_items] if !max_items.nil? && max_items < prefix.size
+      prefix = prefix.map { |p| Gen.h.dereference(p) }
+    end
+    contains = Gen.h.dereference(si.schema['contains'])
+    items = Gen.h.dereference(si.schema['items'])
+    items = nil if !prefix.nil? && !max_items.nil? && prefix.size == max_items
+    unless items.nil?
+      max_items = [ max_items, max_contains ].compact.min if items == contains
+    end
+    alts = {
+      prefix: prefix || [],
+      items: items,
+      contains: contains,
+      max_contains: max_contains,
+      max_items: max_items
+    }
+    si.schema[:alts] = alts
+    # Handle size-based fails. Any type is ok as length is not within limits.
+    if min_items > 1
+      make_name(si.schema, :fail, si.name)
+      out.push("export function #{si.schema[:fail].last}(): #{si.name} { const a = []; a[#{min_items - 2}] = 1; return a as #{si.name}; }")
+    elsif min_items == 1
+      make_name(si.schema, :fail, si.name)
+      out.push("export function #{si.schema[:fail].last}(): #{si.name} { return [] as #{si.name}; }")
+    elsif min_items.zero?
+      make_name(si.schema, :pass, si.name)
+      out.push("export function #{si.schema[:pass].last}(): #{si.name} { return [] as #{si.name}; }")
+    end
+    unless max_items.nil?
+      make_name(si.schema, :fail, si.name)
+      out.push("export function #{si.schema[:fail].last}(): #{si.name} { const a = []; a[#{max_items}] = 0; return a as #{si.name}; }")
+    end
+    todo.push(si)
+  when 'string'
+    pat = si.schema['pattern']
+    min_len = si.schema['minLength']
+    unless min_len.nil?
+      if min_len.positive?
+        s = 'f' * (min_len - 1)
+        make_name(si.schema, :fail, si.name)
+        out.push("export function #{si.schema[:fail].last}(): #{si.name} { return '#{s}'; }")
+      end
+      if pat.nil?
+        s = 's' * min_len
+        make_name(si.schema, :pass, si.name)
+        out.push("export function #{si.schema[:pass].last}(): #{si.name} { return '#{s}'; }")
+      end
+    end
+    max_len = si.schema['maxLength']
+    unless max_len.nil?
+      s = 'f' * (max_len + 1)
+      make_name(si.schema, :fail, si.name)
+      out.push("export function #{si.schema[:fail].last}(): #{si.name} { return '#{s}'; }")
+      if pat.nil?
+        s = 's' * max_len
+        make_name(si.schema, :pass, si.name)
+        out.push("export function #{si.schema[:pass].last}(): #{si.name} { return '#{s}'; }")
+      end
+    end
+    if min_len.nil? && max_len.nil? && pat.nil?
+      s = 's'
+      make_name(si.schema, :pass, si.name)
+      out.push("export function #{si.schema[:pass].last}(): #{si.name} { return '#{s}'; }")
+    end
+    unless pat.nil?
+      tp_path = %w[tests patterns]
+      tps = Gen.x.cfg.dig(*tp_path) || []
+      pt = tps.index { |p| p['pattern'] == pat && p['minLength'] == min_len && p['maxLength'] == max_len }
+      if pt.nil?
+        out.push("// No #{si.name} pattern #{pat} test data in configuration #{tp_path.join('.')}. No make functions.")
+      else
+        pt = tps[pt]
+        { pass: 'pass', fail: 'fail' }.each do |kind, src|
+          pt.fetch(src, []).each do |s|
+            make_name(si.schema, kind, si.name)
+            out.push("export function #{si.schema[kind].last}(): #{si.name} { return '#{s}'; }")
+          end
+        end
+      end
+    end
+    make_name(si.schema, :typefail, si.name)
+    out.push("export function #{si.schema[:typefail].last}(): #{si.name} { return false as unknown as #{si.name}; }")
+    make_name(si.schema, :typefail, si.name)
+    out.push("export function #{si.schema[:typefail].last}(): #{si.name} { return 1 as unknown as #{si.name}; }")
+    make_name(si.schema, :typefail, si.name)
+    out.push("export function #{si.schema[:typefail].last}(): #{si.name} { return {} as unknown as #{si.name}; }")
+    make_name(si.schema, :typefail, si.name)
+    out.push("export function #{si.schema[:typefail].last}(): #{si.name} { return [] as unknown as #{si.name}; }")
+  when 'integer', 'number'
+    if si.schema[:native] == :integer
+      min_val = si.schema.fetch('minimum', si.schema['exclusiveMinimum'])
+      unless min_val.nil?
+        if min_val.negative?
+          min_val = min_val.truncate
+        else
+          min_val = (min_val - min_val.truncate > 0) ? min_val.truncate + 1 : min_val
+        end
+      end
+      max_val = si.schema.fetch('maximum', si.schema['exclusiveMaximum'])
+      max_val = max_val.truncate unless max_val.nil?
+      mo = si.schema.key('multipleOf') ? integerMultiple(si.schema['multipleOf'].abs) : nil
+      mins = surround(min_val, true, mo)
+      maxs = surround(max_val, true, mo)
+      if min_val.nil?
+        if max_val.nil?
+          unsafe = 0.5
+        else
+          unsafe = max_val - 0.5
+        end
+      else
+        if max_val.nil?
+          unsafe = min_val + 0.5
+        else
+          unsafe = (min_val < max_val) ? (0.5 * (max_val - min_val)).truncate + 0.1 : nil
+        end
+      end
+    else
+      max_val = si.schema.fetch('maximum', si.schema['exclusiveMaximum'])
+      max_val = si.schema.fetch('maximum', si.schema['exclusiveMaximum'])
+      mo = si.schema.key('multipleOf') ? si.schema['multipleOf'].abs : nil
+      mins = surround(min_val, false, mo)
+      maxs = surround(max_val, false, mo)
+      unsafe = nil
+    end
+    if si.schema.key?('exclusiveMinimum')
+      mins.shift
+    elsif si.schema.key?('minimum')
+      mins.pop
+    end
+    if si.schema.key?('exclusiveMaximum')
+      maxs.pop
+    elsif si.schema.key?('maximum')
+      maxs.shift
+    end
+    unless mins.first.nil?
+      make_name(si.schema, :fail, si.name)
+      out.push("export function #{si.schema[:fail].last}(): #{si.name} { return #{mins.first}; }")
+    end
+    unless mins.last.nil?
+      make_name(si.schema, :pass, si.name)
+      out.push("export function #{si.schema[:pass].last}(): #{si.name} { return #{mins.last}; }")
+    end
+    unless maxs.first.nil?
+      make_name(si.schema, :pass, si.name)
+      out.push("export function #{si.schema[:pass].last}(): #{si.name} { return #{maxs.first}; }")
+    end
+    unless maxs.last.nil?
+      make_name(si.schema, :fail, si.name)
+      out.push("export function #{si.schema[:fail].last}(): #{si.name} { return #{maxs.last}; }")
+    end
+    if mins.concat(maxs).compact.empty?
+      make_name(si.schema, :pass, si.name)
+      out.push("export function #{si.schema[:pass].last}(): #{si.name} { return 0; }")
+      unless mo.nil?
+        make_name(si.schema, :fail, si.name)
+        out.push("export function #{si.schema[:fail].last}(): #{si.name} { return #{(3 * mo) / 2}; }")
+      end
+    end
+    unless unsafe.nil?
+      make_name(si.schema, :fail, si.name)
+      out.push("export function #{si.schema[:fail].last}(): #{si.name} { return #{unsafe}; }")
+    end
+    make_name(si.schema, :typefail, si.name)
+    out.push("export function #{si.schema[:typefail].last}(): #{si.name} { return false as unknown as #{si.name}; }")
+    make_name(si.schema, :typefail, si.name)
+    out.push("export function #{si.schema[:typefail].last}(): #{si.name} { return 'a' as unknown as #{si.name}; }")
+    make_name(si.schema, :typefail, si.name)
+    out.push("export function #{si.schema[:typefail].last}(): #{si.name} { return {} as unknown as #{si.name}; }")
+    make_name(si.schema, :typefail, si.name)
+    out.push("export function #{si.schema[:typefail].last}(): #{si.name} { return [] as unknown as #{si.name}; }")
+  when 'boolean'
+    make_name(si.schema, :pass, si.name)
+    out.push("export function #{si.schema[:pass].last}(): boolean { return true; }")
+    make_name(si.schema, :pass, si.name)
+    out.push("export function #{si.schema[:pass].last}(): boolean { return false; }")
+    make_name(si.schema, :typefail, si.name)
+    out.push("export function #{si.schema[:typefail].last}(): boolean { return 1 as unknown as boolean; }")
+    make_name(si.schema, :typefail, si.name)
+    out.push("export function #{si.schema[:typefail].last}(): boolean { return 'a' as unknown as boolean; }")
+    make_name(si.schema, :typefail, si.name)
+    out.push("export function #{si.schema[:typefail].last}(): boolean { return {} as unknown as boolean; }")
+    make_name(si.schema, :typefail, si.name)
+    out.push("export function #{si.schema[:typefail].last}(): boolean { return [] as unknown as boolean; }")
+  else
+    raise StandardError, "Unhandled type: #{si.schema['type']} #{si.schema}"
+  end
+end
+Gen.output.join(out)
+%>
+
+// Using these to construct arrays presumes that the maker and contains is-function work.
+type Maker = () => any;
+type Checker = (x: any) => boolean;
+
+function makeArray(length: number, prefixMakers: Array<Maker>, itemMaker: Maker): Array<any> {
+  const result: Array<any> = [];
+  for (const m of prefixMakers) {
+    result.push(m());
+    if (result.length == length) break;
+  }
+  while (result.length < length) {
+    result.push(itemMaker());
+  }
+  return result;
+}
+
+function makeContainingArray(length: number, prefixMakers: Array<Maker>, itemMaker: Maker|null,
+  containsMaker: Maker, containsIs: Checker, minContains: number, maxContains: number): Array<any>
+{
+  let contained = 0;
+  const result: Array<any> = [];
+  for (const m of prefixMakers) {
+    result.push(m());
+    if (containsIs(result[result.length - 1])) ++contained;
+    if (length <= result.length && minContains <= result.length) break;
+  }
+  if (itemMaker === null) {
+    while (contained < minContains) {
+      result.push(containsMaker());
+      ++contained;
+    }
+    while (result.length < length && contained < maxContains) {
+      result.push(containsMaker());
+      ++contained;
+    }
+  } else {
+    while (contained < minContains) {
+      result.push(containsMaker());
+      ++contained;
+    }
+    while (result.length < length && contained < maxContains) {
+      result.push(itemMaker());
+      if (containsIs(result[result.length - 1])) ++contained;
+    }
+  }
+  return result;
+}
+
+function replace(arr: Array<any>, index: number, maker: Maker): Array<any> {
+  arr[Math.min(index, arr.length)] = maker();
+  return arr;
+}
+
+// Complex types.
+<%=
+def other_type(cands)
+  makers = {
+    'boolean' => '() => true',
+    'number' => '() => 1.5',
+    'integer' => '() => 2',
+    'string' => '() => "str"',
+    'object' => '() => ({})',
+    'array' => '() => []'
+  }
+  makers.each do |type, maker|
+    return maker if !cands.index { |c| c['type'] == type }.nil?
+  end
+  return '() => null'
+end
+
+out = []
+loop do
+  found = false
+  process = todo
+  todo = []
+  # What we need to do here is to gather a pass/fail function for each property.
+  process.each do |si|
+    case si.schema['type']
+    when 'object'
+      props = si.schema['properties'] || {}
+      pat_props = si.schema['patternProperties'] || {}
+      add_props = si.schema['additionalProperties']
+      all_props = [ props, pat_props ]
+      all_props.push({ unused: add_props }) if add_props.is_a?(Hash)
+      all_props.each do |ps|
+        ps.each_value do |prop|
+          schema = Gen.h.dereference(prop)
+          if prop[:pass].nil? && !schema[:pass].empty?
+            prop[:pass] = schema[:pass].first
+            found = true
+          end
+          if prop[:fail].nil? && !schema[:fail].empty?
+            prop[:fail] = schema[:fail].first
+          end
+        end
+      end
+      reqd = si.schema.fetch('required', []).sort
+      passes = {}
+      reqd.each { |name| passes[name] = props[name][:pass] if props[name].key?(:pass) }
+      pass_lines = passes.keys.map { |k| "#{k}: #{passes[k]}()" }
+      if si.schema[:reqd_done]
+        remains = false
+        # Cover all uncovered optional ones in turn. Flag as covered.
+        # Explicitly named optional ones.
+        props.each do |name, prop|
+          next if reqd.include?(name)
+          unless prop[:pass].nil? || prop[:pass_done].nil?
+            lines = [ "#{name}: #{prop[:pass]}" ].concat(pass_lines)
+            make_name(si.schema, :pass, si.name)
+            s = <<EOB
+export function #{si.schema[:pass].last}(): #{si.name} {
+  return {
+    #{lines.join(",\n")}
+  } as #{si.name};
+}
+EOB
+            out.push(s)
+            prop[:pass_done] = true
+            found = true
+          end
+          unless prop[:fail].nil? || prop[:fail_done].nil?
+            lines = [ "#{name}: #{prop[:fail]}" ].concat(pass_lines)
+            make_name(si.schema, :fail, si.name)
+            s = <<EOB
+export function #{si.schema[:fail].last}(): #{si.name} {
+  return {
+    #{lines.join(",\n")}
+  } as #{si.name};
+}
+EOB
+            out.push(s)
+            prop[:fail_done] = true
+            found = true
+          end
+          remains = remains || prop[:fail_done].nil? || prop[:pass_done].nil?
+        end
+        # pattern properties. Required string that passes.
+        test_patterns = Gen.x.cfg.dig('tests', 'patterns') || []
+        common_fails = Set.new
+        min_length = test_patterns.map { |x| x['minLength'] }.compact.min
+        max_length = test_patterns.map { |x| x['maxLength'] }.compact.max
+        pats = {}
+        test_patterns.each do |p|
+          pats[p['pattern']] = {
+            pass: p['pass'],
+            fail: p['fail']
+          }
+          common_fails = common_fails & p['fail']
+        end
+        pat_props.each do |pat, prop|
+          name = (pats.dig(pat, 'pass') || []).first
+          next if name.nil?
+          unless prop[:pass].nil? || prop[:pass_done].nil?
+            lines = [ "#{name}: #{prop[:pass]}" ].concat(pass_lines)
+            make_name(si.schema, :pass, si.name)
+            s = <<EOB
+export function #{si.schema[:pass].last}(): #{si.name} {
+  return {
+    #{lines.join(",\n")}
+  } as #{si.name};
+}
+EOB
+            out.push(s)
+            prop[:pass_done] = true
+            found = true
+          end
+          unless prop[:fail].nil? || prop[:fail_done].nil?
+            lines = [ "#{name}: #{prop[:fail]}" ].concat(pass_lines)
+            make_name(si.schema, :fail, si.name)
+            s = <<EOB
+export function #{si.schema[:fail].last}(): #{si.name} {
+  return {
+    #{lines.join(",\n")}
+  } as #{si.name};
+}
+EOB
+            out.push(s)
+            prop[:fail_done] = true
+            found = true
+          end
+          remains = remains || prop[:fail_done].nil? || prop[:pass_done].nil?
+        end
+        name = nil
+        if pat_props.empty?
+          name = 'f' * (props.keys.map(&:size).max + 1)
+        else
+          name = common_fails.to_a.reject { |x| props.key?(x) }.first
+          name = nil if props.key?(name)
+        end
+        if name.nil?
+          warn("#{si.name} no name candidate for additional property tests")
+          si.schema[:ap_fail_done] = true
+          si.schema[:ap_pass_done] = true
+        else
+          if add_props.is_a?(Hash) # Only this accepted.
+            unless add_props[:fail].nil? || si.schema[:ap_fail_done].nil?
+              lines = [ "#{name}: #{add_props[:fail]}" ].concat(pass_lines)
+              make_name(si.schema, :fail, si.name)
+              s = <<EOB
+export function #{si.schema[:fail].last}(): #{si.name} {
+  return {
+    #{lines.join(",\n")}
+  } as #{si.name};
+}
+EOB
+              out.push(s)
+              si.schema[:ap_fail_done] = true
+              found = true
+            end
+            unless add_props[:pass].nil? || si.schema[:ap_pass_done].nil?
+              lines = [ "#{name}: #{add_props[:pass]}" ].concat(pass_lines)
+              make_name(si.schema, :pass, si.name)
+              s = <<EOB
+export function #{si.schema[:pass].last}(): #{si.name} {
+  return {
+    #{lines.join(",\n")}
+  } as #{si.name};
+}
+EOB
+              out.push(s)
+              si.schema[:ap_pass_done] = true
+              found = true
+            end
+            remains = remains || si.schema[:ap_fail_done].nil? || si.schema[:ap_pass_done].nil?
+          elsif add_props.nil? || add_props == true # Anything goes.
+            si.schema[:ap_fail_done] = true
+            unless si.schema[:ap_pass_done].nil?
+              lines = [ "#{name}: true" ].concat(pass_lines)
+              make_name(si.schema, :pass, si.name)
+              s = <<EOB
+export function #{si.schema[:pass].last}(): #{si.name} {
+  return {
+    #{lines.join(",\n")}
+  } as #{si.name};
+}
+EOB
+              out.push(s)
+              si.schema[:ap_pass_done] = true
+              found = true
+            end
+          else # False, only failure.
+            si.schema[:ap_pass_done] = true
+            unless si.schema[:ap_fail_done].nil?
+              lines = [ "#{name}: false" ].concat(pass_lines)
+              make_name(si.schema, :fail, si.name)
+              s = <<EOB
+export function #{si.schema[:fail].last}(): #{si.name} {
+  return {
+    #{lines.join(",\n")}
+  } as #{si.name};
+}
+EOB
+              out.push(s)
+              si.schema[:ap_fail_done] = true
+              si.schema[:unknown_name] = name
+              found = true
+            end
+          end
+        end
+        todo.push(si) if remains
+      end
+      # Required property make functions.
+      if passes.size < reqd.size
+        todo.push(si)
+        next
+      end
+      si.schema[:reqd_done] = true
+      todo.push(si)
+      next if reqd.empty?
+      # We have full required property passes, make pass function.
+      make_name(si.schema, :pass, si.name)
+      s = <<EOB
+export function #{si.schema[:pass].last}(): #{si.name} {
+  return {
+    #{pass_lines.join(",\n")}
+  } as #{si.name};
+}
+EOB
+      out.push(s)
+      # Each required property missing in turn, others present and pass.
+      passes.keys.each do |missing|
+        others = {}.merge(passes)
+        others.delete(missing)
+        make_name(si.schema, :fail, si.name)
+        s = <<EOB
+export function #{si.schema[:fail].last}(): #{si.name} {
+  return {
+    #{others.keys.map { |k| "#{k}: #{others[k]}()" }.join(",\n")}
+  } as #{si.name};
+}
+EOB
+        out.push(s)
+      end
+      # Each required property failing if possible in turn, others present and pass.
+      passes.keys.each do |failing|
+        fail = props[failing][:fail]
+        next if fail.nil?
+        lines = {}.merge(passes)
+        lines.delete(failing)
+        lines = lines.keys.map { |k| "#{k}: #{passes[k]}()" }
+        lines.push("#{failing}: #{fail}()")
+        make_name(si.schema, :fail, si.name)
+        s = <<EOB
+export function #{si.schema[:fail].last}(): #{si.name} {
+  return {
+    #{lines.join(",\n")}
+  } as #{si.name};
+}
+EOB
+        out.push(s)
+      end
+    when 'array'
+      alts = si.schema[:alts]
+      max_items = alts[:max_items]
+      min_items = si.schema.fetch('minItems', 0)
+      if alts[:prefix].empty? && alts[:contains].nil?
+        # Simple array with just items.
+        items = alts[:items]
+        if items[:pass].empty?
+          todo.push(si) # Not ready yet.
+          next
+        end
+        counts = [ min_items + 1, max_items.nil? ? nil : max_items - 1 ].compact.reject { |k| k <= min_items }.reject { |k| (max_items || (min_items + 1)) < k }
+        counts.each do |k|
+          make_name(si.schema, :pass, si.name)
+          s = <<EOB
+export function #{si.schema[:pass].last}(): #{si.name} {
+    const a: #{si.name} = [];
+    for (let k = 0; k < #{k}; ++k) a[k] = #{items[:pass].first}();
+    return a;
+}
+EOB
+          out.push(s)
+        end
+        fn = items[:fail].first unless items[:fail].empty?
+        fn = items[:typefail].first unless fn.nil? && items[:typefail].empty?
+        unless fn.nil?
+          counts.each do |k|
+            make_name(si.schema, :fail, si.name)
+            s = <<EOB
+export function #{si.schema[:fail].last}(): #{si.name} {
+    const a: #{si.name} = [];
+    for (let k = 0; k < #{k}; ++k) a[k] = #{fn}();
+    return a;
+}
+EOB
+            out.push(s)
+          end
+        end
+        next
+      end
+      max_contains = alts[:max_contains]
+      miss = (alts.dig(:items, :pass) || []).empty? || (alts.dig(:contains, :pass) || []).empty?
+      unless miss
+        miss = (alts[:prefix] || []).index { |p| p[:pass].empty? }
+      end
+      if miss.nil?
+        # All schemas have pass maker function.
+        # Assume fail makers are present as they are usually simple when possible.
+        sizes = [ min_items, min_contains, schemas.size, max_contains, max_items ].compact.sort!.uniq
+        pp = alts[:prefix].nil? ? '[]' : "[ #{alts[:prefix].map { |p| "#{p[:pass].first}()" }.join (', ')} ]"
+        sizes.each do |target|
+          # All pass.
+          if alts[:contains].nil?
+            ip = alts[:items].nil? ? '() => 1' : "#{alts[:items][:pass].first}()"
+            ma = "makeArray(#{target}, #{pp}, #{ip})"
+          else
+            ip = alts[:items].nil? ? 'null' : "#{alts[:items][:pass].first}()"
+            ma = "makeContainingArray(#{target}, #{pp}, #{ip}, #{alts[:contains][:pass].first}, #{alts[:contains][:is]}, #{min_contains}, #{max_contains || target})"
+          end
+          make_name(si.schema, :pass, si.name)
+          out.push("export function #{si.schema[:pass].last}(): #{si.name} { return #{ma} as #{si.name}; }")
+          # Each fails in turn.
+          next unless target == sizes.max
+          target.times do |idx|
+            if idx < pp.size
+              m = other_type([ alts[:prefix][idx], alts[:contains] ].compact)
+              make_name(si.schema, :fail, si.name)
+              out.push("export function #{si.schema[:fail].last}(): #{si.name} { return replace(#{ma}, #{idx}, #{m}) as #{si.name}; }")
+            else
+              m = other_type([ alts[:items], alts[:contains] ].compact)
+              make_name(si.schema, :fail, si.name)
+              out.push("export function #{si.schema[:fail].last}(): #{si.name} { return replace(#{ma}, #{idx}, #{m}) as #{si.name}; }")
+            end
+          end
+        end
+        unless alts[:contains].nil?
+          # Contains fails need special maker calls.
+          unless max_contains.nil?
+            # Too many contains fail, set minContains > max_contains
+            len = max_contains + 1
+            ma = "makeContainingArray(#{min_items}, #{pp}, null, #{alts[:contains][:pass].first}, #{alts[:contains][:is]}, #{len}, #{len})"
+            make_name(si.schema, :fail, si.name)
+            out.push("export function #{si.schema[:fail].last}(): #{si.name} { return #{ma} as #{si.name}; }")
+            # Exactly max_contains pass, minContains == maxContains == max_contains
+            len = max_contains
+            ma = "makeContainingArray(#{min_items}, #{pp}, null, #{alts[:contains][:pass].first}, #{alts[:contains][:is]}, #{len}, #{len})"
+            make_name(si.schema, :pass, si.name)
+            out.push("export function #{si.schema[:pass].last}(): #{si.name} { return #{ma} as #{si.name}; }")
+          end
+          unless min_contains.zero?
+            certain_mismatch = alts.fetch(:prefix, []).count { |s| s[:type] != contains['type'] }
+            if alts.fetch(:prefix, []).size - certain_mismatch < min_contains
+              # Too few contains fail, if applicable and possible. maxContains < min_contains
+              ip = alts[:items].nil? ? other_type([ contains ]) : "#{alts[:items][:pass].first}()"
+              len = min_contains - 1
+              ma = "makeContainingArray(#{min_items}, #{pp}, #{ip}, #{alts[:contains][:pass].first}, #{alts[:contains][:is]}, #{len}, #{len})"
+              make_name(si.schema, :fail, si.name)
+              out.push("export function #{si.schema[:fail].last}(): #{si.name} { return #{ma} as #{si.name}; }")
+            end
+            if min_items <= min_contains + certain_mismatch
+              # Min contains pass, minContains == maxContains == min_contains
+              len = min_contains
+              ma = "makeContainingArray(#{min_items}, #{pp}, () => null, #{alts[:contains][:pass].first}, #{alts[:contains][:is]}, #{len}, #{len})"
+              make_name(si.schema, :pass, si.name)
+              out.push("export function #{si.schema[:pass].last}(): #{si.name} { return #{ma} as #{si.name}; }")
+            end
+          end
+        end
+        si.schema[:type_done] = true
+      end
+      todo.push(si) unless si.schema[:type_done]
+    end
+  end
+  unless found
+    warn("Failed to generate maker functions for types:\n#{todo.map(&:name).sort!.join("\n")}")
+    break
+  end
+end
+Gen.output.join(out)
+%>
+
+// Operation parameter type makers.
+<%=
+out = []
+Gen.doc['paths'].each do |path, path_item_object|
+  oos = OpenAPISourceTools::ApiObjects.operation_objects(path_item_object)
+  oos.each do |method, operation_object|
+    operation_object[:pass] = []
+    operation_object[:fail] = []
+    operation_object[:typefail] = []
+    operation_object[:throw] = []
+    if operation_object[:parameterless]
+      make_name(operation_object, :pass, operation_object[:args_name])
+      out.push("export function #{operation_object[:pass].last}(): #{operation_object[:args_name]} { return {} as #{operation_object[:args_name]}; }")
+      make_name(operation_object, :typefail, operation_object[:args_name])
+      out.push("export function #{operation_object[:typefail].last}(): #{operation_object[:args_name]} { return 1 as unknown as #{operation_object[:args_name]}; }")
+      make_name(operation_object, :typefail, operation_object[:args_name])
+      out.push("export function #{operation_object[:typefail].last}(): #{operation_object[:args_name]} { return 'str' as unknown as #{operation_object[:args_name]}; }")
+      make_name(operation_object, :typefail, operation_object[:args_name])
+      out.push("export function #{operation_object[:typefail].last}(): #{operation_object[:args_name]} { return true as unknown as #{operation_object[:args_name]}; }")
+      make_name(operation_object, :typefail, operation_object[:args_name])
+      out.push("export function #{operation_object[:typefail].last}(): #{operation_object[:args_name]} { return null as unknown as #{operation_object[:args_name]}; }")
+      make_name(operation_object, :typefail, operation_object[:args_name])
+      out.push("export function #{operation_object[:typefail].last}(): #{operation_object[:args_name]} { return [] as unknown as #{operation_object[:args_name]}; }")
+      next
+    end
+    paraschemas = operation_object[:paraschemas]
+    commons = {}
+    [ :pass, :fail, :typefail, 'missing' ].each do |kind|
+      paraschemas.size.times do |chosen|
+        param_makers = []
+        category = kind
+        paraschemas.size.times do |k|
+          ps = paraschemas[k]
+          schema = ps[:schema]
+          req = ps[:param]['required']
+          needed = :pass
+          if k == chosen
+            needed = kind
+            if kind == 'missing'
+              if req
+                needed = :typefail unless schema[:typefail].empty?
+                needed = :fail unless schema[:fail].empty?
+                category = needed
+              else
+                param_makers.push(nil)
+                next
+              end
+            end
+          end
+          m = schema[needed].first
+          break if m.nil?
+          param_makers.push({ maker: m, param: ps[:param] })
+        end
+        next if param_makers.size < paraschemas.size
+        common = param_makers.compact.map { |pm| "#{pm[:param][:name]}: #{pm[:maker]}()" }
+        commons[common.sort.join(';')] = { common: common, category: category }
+      end
+    end
+    commons.each_value do |cc|
+      common = cc[:common]
+      category = cc[:category]
+      req_body = operation_object['requestBody']
+      if req_body.nil?
+        make_name(operation_object, category, operation_object[:args_name])
+        s = <<EOB
+export function #{operation_object[category].last}(): #{operation_object[:args_name]} {
+  return {
+    #{common.join(",\n")}
+  } as unknown as #{operation_object[:args_name]};
+}
+EOB
+        out.push(s)
+        next
+      end
+      body_types = req_body[:body_types]
+      req = req_body.fetch('required', false)
+      if req
+        if category == :pass
+          # Missing required body fail because of missing body.
+          make_name(operation_object, :fail, operation_object[:args_name])
+          s = <<EOB
+export function #{operation_object[:fail].last}(): #{operation_object[:args_name]} {
+  return {
+    #{common.join(",\n")}
+  } as unknown as #{operation_object[:args_name]};
+}
+EOB
+          out.push(s)
+        else
+          # Body is present but fails because of other errors.
+          if body_types.key?('any')
+            lines = [].concat(common, [ "body: {}" ])
+          else
+            lines = common
+            body_types.each do |btype, bschema|
+              bm = bschema[:pass].first
+              next if bm.nil?
+              lines = [].concat(common, [ "body#{btype}: #{bm}()" ])
+              break
+            end
+          end
+          make_name(operation_object, category, operation_object[:args_name])
+          s = <<EOB
+export function #{operation_object[category].last}(): #{operation_object[:args_name]} {
+  return {
+    #{lines.join(",\n")}
+  } as unknown as #{operation_object[:args_name]};
+}
+EOB
+          out.push(s)
+        end
+      end
+      next unless category == :pass
+      # Passes for each body type property present at a time.
+      body_types.each do |btype, bschema|
+        next if btype == 'any'
+        bm = bschema[:pass].first
+        next if bm.nil?
+        # Pass for type-specific body name.
+        make_name(operation_object, category, operation_object[:args_name])
+        lines = [].concat(common, [ "body#{btype}: #{bm}()" ])
+        s = <<EOB
+export function #{operation_object[category].last}(): #{operation_object[:args_name]} {
+  return {
+    #{lines.join(",\n")}
+  } as unknown as #{operation_object[:args_name]};
+}
+EOB
+        out.push(s)
+        # Pass for type-specific body name and encoded present.
+        make_name(operation_object, category, operation_object[:args_name])
+        lines = [].concat(common, [ "body#{btype}: #{bm}()", "encoded: fakeEncoded" ])
+        s = <<EOB
+export function #{operation_object[category].last}(): #{operation_object[:args_name]} {
+  return {
+    #{lines.join(",\n")}
+  } as unknown as #{operation_object[:args_name]};
+}
+EOB
+        out.push(s)
+        # Fail for type-specific body name and invalid encoded present.
+        make_name(operation_object, :fail, operation_object[:args_name])
+        lines = [].concat(common, [ "body#{btype}: #{bm}()", "encoded: failEncoded" ])
+        s = <<EOB
+export function #{operation_object[:fail].last}(): #{operation_object[:args_name]} {
+  return {
+    #{lines.join(",\n")}
+  } as unknown as #{operation_object[:args_name]};
+}
+EOB
+        out.push(s)
+        # Pass for generic body.
+        make_name(operation_object, category, operation_object[:args_name])
+        lines = [].concat(common, [ "body: #{bm}()" ])
+        s = <<EOB
+export function #{operation_object[category].last}(): #{operation_object[:args_name]} {
+  return {
+    #{lines.join(",\n")}
+  } as unknown as #{operation_object[:args_name]};
+}
+EOB
+        out.push(s)
+        # Pass for generic body and encoded present.
+        make_name(operation_object, category, operation_object[:args_name])
+        lines = [].concat(common, [ "body: #{bm}()", "encoded: fakeEncoded" ])
+        s = <<EOB
+export function #{operation_object[category].last}(): #{operation_object[:args_name]} {
+  return {
+    #{lines.join(",\n")}
+  } as unknown as #{operation_object[:args_name]};
+}
+EOB
+        out.push(s)
+        # Fail for generic body and invalid encoded present.
+        make_name(operation_object, :fail, operation_object[:args_name])
+        lines = [].concat(common, [ "body: #{bm}()", "encoded: failEncoded" ])
+        s = <<EOB
+export function #{operation_object[:fail].last}(): #{operation_object[:args_name]} {
+  return {
+    #{lines.join(",\n")}
+  } as unknown as #{operation_object[:args_name]};
+}
+EOB
+        out.push(s)
+        # Pass for two body fields set to same object instance.
+        make_name(operation_object, category, operation_object[:args_name])
+        lines = [].concat(common, [ "body#{btype}: b", "body: b" ])
+        s = <<EOB
+export function #{operation_object[category].last}(): #{operation_object[:args_name]} {
+  const b = #{bm}();
+  return {
+    #{lines.join(",\n")}
+  } as unknown as #{operation_object[:args_name]};
+}
+EOB
+        out.push(s)
+        # Pass for two body fields set to same object instance and encoded present.
+        make_name(operation_object, category, operation_object[:args_name])
+        lines = [].concat(common, [ "body#{btype}: b", "body: b", "encoded: fakeEncoded" ])
+        s = <<EOB
+export function #{operation_object[category].last}(): #{operation_object[:args_name]} {
+  const b = #{bm}();
+  return {
+    #{lines.join(",\n")}
+  } as unknown as #{operation_object[:args_name]};
+}
+EOB
+        out.push(s)
+        # Fail for two body fields set to same object instance and invalid encoded present.
+        make_name(operation_object, :fail, operation_object[:args_name])
+        lines = [].concat(common, [ "body#{btype}: b", "body: b", "encoded: failEncoded" ])
+        s = <<EOB
+export function #{operation_object[:fail].last}(): #{operation_object[:args_name]} {
+  const b = #{bm}();
+  return {
+    #{lines.join(",\n")}
+  } as unknown as #{operation_object[:args_name]};
+}
+EOB
+        out.push(s)
+        # Only throws for sure since category is :pass.
+        # Throw for two body fields set to different object instances.
+        make_name(operation_object, :throw, operation_object[:args_name])
+        lines = [].concat(common, [ "body#{btype}: #{bm}()", "body: #{bm}()" ])
+        s = <<EOB
+export function #{operation_object[:throw].last}(): #{operation_object[:args_name]} {
+  return {
+    #{lines.join(",\n")}
+  } as unknown as #{operation_object[:args_name]};
+}
+EOB
+        out.push(s)
+        # Pass for two body fields set to different object instances, with encoded overriding.
+        make_name(operation_object, :pass, operation_object[:args_name])
+        lines = [].concat(common, [ "body#{btype}: #{bm}()", "body: #{bm}()", "encoded: fakeEncoded" ])
+        s = <<EOB
+export function #{operation_object[:pass].last}(): #{operation_object[:args_name]} {
+  return {
+    #{lines.join(",\n")}
+  } as unknown as #{operation_object[:args_name]};
+}
+EOB
+        out.push(s)
+        # Fail for two body fields set to different object instances, with invalid encoded.
+        make_name(operation_object, :fail, operation_object[:args_name])
+        lines = [].concat(common, [ "body#{btype}: #{bm}()", "body: #{bm}()", "encoded: failEncoded" ])
+        s = <<EOB
+export function #{operation_object[:fail].last}(): #{operation_object[:args_name]} {
+  return {
+    #{lines.join(",\n")}
+  } as unknown as #{operation_object[:args_name]};
+}
+EOB
+        out.push(s)
+      end
+      if body_types.key?('any')
+        # Any type body pass.
+        make_name(operation_object, category, operation_object[:args_name])
+        lines = [].concat(common, [ "body: {}" ])
+        s = <<EOB
+export function #{operation_object[category].last}(): #{operation_object[:args_name]} {
+  return {
+    #{lines.join(",\n")}
+  } as unknown as #{operation_object[:args_name]};
+}
+EOB
+        out.push(s)
+        # Any type body pass, with encoded body.
+        make_name(operation_object, category, operation_object[:args_name])
+        lines = [].concat(common, [ "body: {}", "encoded: fakeEncoded" ])
+        s = <<EOB
+export function #{operation_object[category].last}(): #{operation_object[:args_name]} {
+  return {
+    #{lines.join(",\n")}
+  } as unknown as #{operation_object[:args_name]};
+}
+EOB
+        out.push(s)
+        # Any type body pass, with invalid encoded body.
+        make_name(operation_object, :fail, operation_object[:args_name])
+        lines = [].concat(common, [ "body: {}", "encoded: failEncoded" ])
+        s = <<EOB
+export function #{operation_object[:fail].last}(): #{operation_object[:args_name]} {
+  return {
+    #{lines.join(",\n")}
+  } as unknown as #{operation_object[:args_name]};
+}
+EOB
+        out.push(s)
+      else
+        # Fail for generic body with each type.
+        body_types.each do |btype, bschema|
+          bm = bschema[:fail].first
+          next if bm.nil?
+          make_name(operation_object, :fail, operation_object[:args_name])
+          lines = [].concat(common, [ "body: #{bm}()" ])
+          s = <<EOB
+export function #{operation_object[:fail].last}(): #{operation_object[:args_name]} {
+  return {
+    #{lines.join(",\n")}
+  } as unknown as #{operation_object[:args_name]};
+}
+EOB
+          out.push(s)
+          # Pass with encoded present.
+          make_name(operation_object, :pass, operation_object[:args_name])
+          lines = [].concat(common, [ "body: #{bm}()", "encoded: fakeEncoded" ])
+          s = <<EOB
+export function #{operation_object[:pass].last}(): #{operation_object[:args_name]} {
+  return {
+    #{lines.join(",\n")}
+  } as unknown as #{operation_object[:args_name]};
+}
+EOB
+          out.push(s)
+          # Fail with invalid encoded present.
+          make_name(operation_object, :fail, operation_object[:args_name])
+          lines = [].concat(common, [ "body: #{bm}()", "encoded: failEncoded" ])
+          s = <<EOB
+export function #{operation_object[:fail].last}(): #{operation_object[:args_name]} {
+  return {
+    #{lines.join(",\n")}
+  } as unknown as #{operation_object[:args_name]};
+}
+EOB
+          out.push(s)
+        end
+      end
+      # Fails for each specific type body property present at a time.
+      body_types.each do |btype, bschema|
+        next if btype == 'any'
+        bm = bschema[:fail].first
+        next if bm.nil?
+        make_name(operation_object, :fail, operation_object[:args_name])
+        lines = [].concat(common, [ "body#{btype}: #{bm}()" ])
+        s = <<EOB
+export function #{operation_object[:fail].last}(): #{operation_object[:args_name]} {
+  return {
+    #{lines.join(",\n")}
+  } as unknown as #{operation_object[:args_name]};
+}
+EOB
+        out.push(s)
+        # Same with encoded present.
+        make_name(operation_object, :pass, operation_object[:args_name])
+        lines = [].concat(common, [ "body#{btype}: #{bm}()", "encoded: fakeEncoded" ])
+        s = <<EOB
+export function #{operation_object[:pass].last}(): #{operation_object[:args_name]} {
+  return {
+    #{lines.join(",\n")}
+  } as unknown as #{operation_object[:args_name]};
+}
+EOB
+        out.push(s)
+        # Fail with invalid encoded present.
+        make_name(operation_object, :fail, operation_object[:args_name])
+        lines = [].concat(common, [ "body#{btype}: #{bm}()", "encoded: failEncoded" ])
+        s = <<EOB
+export function #{operation_object[:fail].last}(): #{operation_object[:args_name]} {
+  return {
+    #{lines.join(",\n")}
+  } as unknown as #{operation_object[:args_name]};
+}
+EOB
+        out.push(s)
+      end
+      # Fails for two body members with different objects.
+      btypes = body_types.keys.reject { |k| k == 'any' }.sort!
+      btypes.size.times do |idx|
+        bschema = body_types[btypes[idx]]
+        bm = bschema[:pass].first
+        next if bm.nil?
+        0.upto(idx - 1) do |k|
+          kschema = body_types[btypes[k]]
+          km = kschema[:pass].first
+          next if km.nil?
+          make_name(operation_object, :throw, operation_object[:args_name])
+          lines = [].concat(common, [
+            "body#{btypes[k]}: #{km}()",
+            "body#{btypes[idx]}: #{bm}()"
+          ])
+          s = <<EOB
+export function #{operation_object[:throw].last}(): #{operation_object[:args_name]} {
+  return {
+    #{lines.join(",\n")}
+  } as unknown as #{operation_object[:args_name]};
+}
+EOB
+          out.push(s)
+        end
+      end
+    end
+    make_name(operation_object, :typefail, operation_object[:args_name])
+    s = <<EOB
+export function #{operation_object[:typefail].last}(): #{operation_object[:args_name]} {
+  return 1 as unknown as #{operation_object[:args_name]};
+}
+EOB
+    out.push(s)
+  end
+end
+Gen.output.join(out)
+%>
+
+// Operation response type makers.
+
+<%=
+out = []
+Gen.doc.dig('components', 'responses').each do |name, response|
+  name2type = response[:name2type]
+  next if name2type.nil? # Nothing was made.
+  content = response['content'] || {}
+  response[:pass] = []
+  response[:fail] = []
+  response[:null] = []
+  response[:typefail] = []
+  commons = {}
+  [ :pass, :fail, :null, :typefail ].each do |kind|
+    n2t_keys = name2type.keys.sort!
+    n2t_keys.size.times do |chosen|
+      type_makers = []
+      n2t_keys.size.times do |k|
+        t = name2type[n2t_keys[k]]
+        needed = (k == chosen) ? kind : :pass
+        if needed == :null
+          type_makers.push({ maker: nil, type: t, name: t[:name] })
+          next
+        end
+        m = t[:schema][needed].first
+        break if m.nil?
+        type_makers.push({ maker: m, type: t, name: t[:name] })
+      end
+      next if type_makers.size < name2type.size
+      common = type_makers.map do |tm|
+        if tm[:maker].nil?
+          "#{tm[:name]}: null"
+        else
+          "#{tm[:name]}: #{tm[:maker]}()"
+        end
+      end
+      commons[common.join(';')] = { common: common, kind: kind }
+    end
+  end
+  commons['empty'] = { common: [], kind: :pass } if commons.empty?
+  commons.each_value do |cc|
+    common = cc[:common]
+    category = cc[:kind]
+    make_name(response, category, response[:name])
+    s = <<EOB
+export function #{response[category].last}(): #{response[:name]} {
+  return {
+    #{common.join(",\n")}
+  } as unknown as #{response[:name]};
+}
+EOB
+    out.push(s)
+    content.each do |media_type, mto|
+      [ :pass, :fail, :typefail ].each { |k| mto[k] = [] unless mto.key?(k) }
+      next unless mto.key?(:name)
+      schema = mto[:decoded]
+      if schema[:name] == 'any'
+        make_name(mto, category, mto[:name])
+        lines = [].concat(common, [ "body: {}" ])
+        s = <<EOB
+export function #{mto[:pass].last}(): #{mto[:name]} {
+  return {
+    #{lines.join(",\n")}
+  } as unknown as #{mto[:name]};
+}
+EOB
+        out.push(s)
+        next
+      end
+      [ :pass, :fail, :typefail ].each do |k|
+        kidx = [ :pass, :fail, :typefail ].index(k)
+        catidx = [ :pass, :fail, :typefail ].index(category) || 0
+        cat = [ :pass, :fail, :typefail ][ [ kidx, catidx ].max ]
+        m = schema[k].first
+        next if m.nil?
+        make_name(mto, cat, mto[:name])
+        lines = [].concat(common, [ "body: #{m}()" ])
+        s = <<EOB
+export function #{mto[cat].last}(): #{mto[:name]} {
+  return {
+    #{lines.join(",\n")}
+  } as unknown as #{mto[:name]};
+}
+EOB
+        out.push(s)
+      end
+      # Add one non-object typefail.
+      make_name(mto, :typefail, mto[:name])
+      s = <<EOB
+export function #{mto[:typefail].last}(): #{mto[:name]} {
+  return 3 as unknown as #{mto[:name]};
+}
+EOB
+      out.push(s)
+    end
+  end
+  # Add one non-object typefail.
+  make_name(response, :typefail, response[:name])
+  s = <<EOB
+export function #{response[:typefail].last}(): #{response[:name]} {
+  return 2 as unknown as #{response[:name]};
+}
+EOB
+  out.push(s)
+end
+Gen.output.join(out)
+%>

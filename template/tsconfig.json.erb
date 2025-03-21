@@ -1,0 +1,51 @@
+<%=
+# Default tsconfig.json. You should provide your own.
+defaults = {
+  "compilerOptions" => {
+    "outDir" => "./pkg",
+    "noImplicitAny" => true,
+    "forceConsistentCasingInFileNames" => true,
+    "erasableSyntaxOnly" => false,
+    "declaration" => true,
+    "rootDir" => '.',
+    'sourceMap' => true
+  },
+  "include" => [
+    "src", "test"
+  ]
+}
+tgt = Gen.x.cfg.fetch('target', 'browser')
+if tgt == 'node'
+  defaults.merge!({
+    "extends" => ["@tsconfig/node-lts/tsconfig.json", "@tsconfig/node-ts/tsconfig.json"]
+  })
+  defaults['compilerOptions'].merge!({
+    "module" => "nodenext",
+    "moduleResolution" => "nodenext",
+    "exactOptionalPropertyTypes" => true,
+    "types" => ["node", "mocha"]
+  })
+elsif tgt == 'browser'
+  defaults.merge!({
+    "extends" => ["@tsconfig/recommended/tsconfig.json"],
+  })
+  defaults['compilerOptions'].merge!({
+    "module" => "es6",
+    "moduleResolution" => "bundler",
+    "exactOptionalPropertyTypes" => true,
+    "types" => ["web", "mocha"]
+  })
+end
+begin
+  cfg = Gen.x.cfg['tsconfig'] || {}
+  cfg = JSON.parse(cfg) unless cfg.is_a?(Hash)
+rescue StandardError => e
+  raise StandardError, "#{OpenAPISourceToolsFetchTypescript::NAME}: Error parsing tsconfig.json: #{e.message}"
+end
+%w[compilerOptions].each do |key|
+  next unless cfg.key?(key) && defaults.key?(key)
+  cfg[key].merge!(defaults[key]) { |_key, cfg_value, _default_value| cfg_value }
+end
+cfg.merge!(defaults) { |_key, cfg_value, _default_value| cfg_value }
+Gen.output.pretty_json(cfg)
+%>

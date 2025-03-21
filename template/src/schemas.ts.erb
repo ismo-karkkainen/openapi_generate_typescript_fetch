@@ -1,0 +1,1013 @@
+<%=
+Gen.output.config = Gen.x.cfg['ts_indentation']
+Gen.x.generator_info
+%>
+
+import type {SchemaCheckers, String2Any} from './helpers.d.ts';
+import {isSchema, baseSchema} from './helpers.js';
+
+function unknown(x: unknown, name: string): Error {
+  if (isArray(x)) {
+    return new Error(`unknown of type array, length ${x.length}, is not ${name}`);
+  }
+  if (isObject(x)) {
+    const keyType: Array<string> = Object.keys(x).map((key) => `${key}: ${typeof x[key as keyof object]}`);
+    if (keyType.length == 0)
+      return new Error(`unknown of type object with no keys is not ${name}`);
+    if (keyType.length == 1)
+      return new Error(`unknown of type object { ${keyType[0] } is not ${name}`)
+    return new Error(`unknown of type object {\n  ${keyType.join('\n  ')}\n} is not ${name}`)
+  }
+  return new Error(`unknown of type ${typeof x} is not ${name}`);
+}
+
+// For completeness. Used by is/unknown2/base functions later.
+
+export function isNot(x: unknown): x is any {
+  return false;
+}
+
+export function isString(x: unknown): x is string {
+  return typeof x == typeof '';
+}
+
+export function unknown2String(x: unknown): string {
+  if (isString(x))
+    return x as string;
+  throw unknown(x, 'string');
+}
+
+export function baseString(s: string): string {
+  return s;
+}
+
+export function isNumber(x: unknown): x is number {
+  return typeof x == typeof 1 && !Number.isNaN(x);
+}
+
+export function unknown2Number(x: unknown): number {
+  if (isNumber(x))
+    return x as number;
+  throw unknown(x, 'number');
+}
+
+export function baseNumber(n: number): number {
+  return n;
+}
+
+export function isBoolean(x: unknown): x is boolean {
+  return typeof x == typeof true;
+}
+
+export function unknown2Boolean(x: unknown): boolean {
+  if (isBoolean(x))
+    return x as boolean;
+  throw unknown(x, 'boolean');
+}
+
+export function baseBoolean(b: boolean): boolean {
+  return b;
+}
+
+export function baseArray(a: Array<any>): Array<any> {
+  const out = [];
+  for (const x of a) {
+    if (isArray(x))
+      out.push(baseArray(x as Array<any>));
+    else if (isObject(x))
+      out.push(baseObject(x as object));
+    else
+      out.push(x); // Boolean, string, number, null, or undefined maybe.
+  }
+  return out;
+}
+
+export function isArray(x: unknown): x is Array<any> {
+  return Array.isArray(x);
+}
+
+export function unknown2Array(x: unknown): Array<any> {
+  if (isArray(x))
+    return x as Array<any>;
+  throw unknown(x, 'array');
+}
+
+export function isObject(x: unknown): x is object {
+  return typeof x == typeof {} && x !== null && !Array.isArray(x);
+}
+
+export function unknown2Object(x: unknown): object {
+  if (isObject(x))
+    return x as object;
+  throw unknown(x, 'object');
+}
+
+export function baseObject(o: object): object {
+  const keys = Object.keys(o);
+  const out: String2Any = {};
+  for (const k of keys) {
+    const x: unknown = o[k as keyof object];
+    if (isArray(x))
+      out[k] = baseArray(x as Array<any>);
+    else if (isObject(x))
+      out[k] = baseObject(x as object);
+    else
+      out[k] = x;
+  }
+  return out;
+}
+
+export function isAny(a: any): a is any {
+  return true;
+}
+
+export function baseAny(a: any): any {
+  return a;
+}
+
+export function unknown2Any(x: unknown): any {
+  return x as any;
+}
+
+// Interfaces, types, and checker functions.
+<%=
+# Names first.
+sis = Gen.x.order
+sis.each do |si|
+  si.schema[:name] = si.name # For use later.
+  si.schema[:is] = "is#{LuckyCase.pascal_case(si.name)}"
+  si.schema[:unknown] = "unknown2#{si.name}"
+  si.schema[:base] = "base#{LuckyCase.pascal_case(si.name)}"
+  si.schema[:checkers] = "checkers#{LuckyCase.pascal_case(si.name)}"
+  si.schema[:obj] = OpenAPIGenerateTypeScriptFetch::ObjectSchema.new(si.schema) if si.schema['type'] == 'object'
+end
+# Output.
+out = []
+checker = []
+sis = Gen.x.order
+sis.each do |si|
+  Gen.x.schemas.functions.push(si.schema[:is])
+  Gen.x.schemas.functions.push(si.schema[:base])
+  Gen.x.schemas.functions.push(si.schema[:unknown])
+  comment = [ si.schema['summary'], si.schema['description'] ].compact!
+  unless comment.empty?
+    s = <<EOB
+/* #{si.name}:
+#{comment.join("\n\n")}
+*/
+EOB
+    out.push(s)
+  end
+  case si.schema['type']
+  when 'object'
+    Gen.x.schemas.types.push(si.name)
+    os = si.schema[:obj]
+    props = si.schema['properties'] || {}
+    # Empty object special case.
+    if os.props.empty?
+      s = <<EOB
+export type #{si.name} = object;
+
+export function #{si.schema[:is]}(x: unknown): x is #{si.name} {
+  return isObject(x);
+}
+
+export function #{si.schema[:unknown]}(x: unknown): #{si.name} {
+  if (#{si.schema[:is]}(x))
+    return x as #{si.name};
+  throw unknown(x, '#{si.name}');
+}
+
+export function #{si.schema[:base]}(x: #{si.name}): #{si.name} {
+  return x as #{si.name}; // Object without known properties, nothing to do.
+}
+EOB
+      out.push(s)
+      next
+    end
+    # Normal object.
+    # Call class constructor type.
+    # Named properties, required and optional.
+    reqd = si.schema['required'] || []
+    o = [ true ]
+    preq = []
+    popt = []
+    kreq = []
+    os.props.select { |p| !p.pattern && !p.additional }.each do |p|
+      ps = Gen.h.dereference(p.spec)
+      o.push("#{p.name}#{p.req ? '' : '?'}: #{p.type};")
+      (p.req ? preq : popt).push({
+        name: p.name,
+        is: ps[:is],
+        base: ps[:base]
+      })
+      kreq.push(p.name) if p.req
+    end
+    # Pattern properties.
+    ppat = []
+    cres = []
+    os.props.select { |p| p.pattern }.each do |p|
+      ps = Gen.h.dereference(p.spec)
+      o.push("// Pattern: #{p.name}: #{p.type}")
+      cre_name = "re#{si.name}_#{cres.size}"
+      ppat.push({
+        is: ps[:is],
+        base: ps[:base],
+        cre: cre_name
+      })
+      cres.push("const #{cre_name} = new RegExp(atob('#{Base64.strict_encode64(p.name)}')); // #{p.name}")
+    end
+    if os.additional
+      add_props = os.props.select(&:additional).first
+      if add_props.is_a?(Hash)
+        ps = Gen.h.dereference(add_props)
+        o.push("// Additional properties of type: #{p.type}")
+        ap = "additional: { is: #{ps[:is]}, base: #{ps[:base]} },"
+      else
+        ap = "additional: { is: isAny, base: baseAny },"
+      end
+    else
+      o.push('// Additional properties are not allowed.')
+      ap = "additional: { is: isNot },"
+    end
+    s = <<EOB
+export type #{si.name} = {
+#{Gen.output.join(o)}
+}
+
+#{cres.join("\n")}
+const #{si.schema[:checkers]}: SchemaCheckers = {
+  requiredKeys: [#{kreq.map { |key| "'#{key}'" }.join(', ')}],
+  required: {
+    #{preq.map { |p| "'#{p[:name]}': { is: #{p[:is]}, base: #{p[:base]} }" }.join(",\n")}
+  },
+  optional: {
+    #{popt.map { |p| "'#{p[:name]}': { is: #{p[:is]}, base: #{p[:base]} }" }.join(",\n")}
+  },
+  #{ap}
+  patterns: [
+    #{ppat.map { |p| "{ re: #{p[:cre]}, funcs: { is: #{p[:is]}, base: #{p[:base]} }}" }.join(",\n") }
+  ]
+}
+
+export function #{si.schema[:is]}(x: unknown): x is #{si.name} {
+  if (!isObject(x))
+    return false;
+  return isSchema(x as object, #{si.schema[:checkers]});
+}
+
+export function #{si.schema[:unknown]}(x: unknown): #{si.name}  {
+  if (#{si.schema[:is]}(x))
+    return x as #{si.name};
+  throw unknown(x, '#{si.name}');
+}
+
+export function #{si.schema[:base]}(x: #{si.name}): #{si.name} {
+  return baseSchema(x, #{si.schema[:checkers]}) as #{si.name};
+}
+EOB
+    out.push(s)
+  when 'array'
+    Gen.x.schemas.types.push(si.name)
+    min_items = si.schema.fetch('minItems', 0)
+    max_items = si.schema['maxItems']
+    min_contains = si.schema.fetch('minContains', 0)
+    max_contains = si.schema['maxContains']
+    # Opportunity to warn.
+    max_contains = nil if !max_items.nil? && !max_contains.nil? && max_items < max_contains
+    # Uniqueness might be better implemented using custom code.
+    # Checking here could use lodash or underscore.
+    uniq = si.schema.fetch('uniqueItems', false)
+    # This requires that the array has optional types.
+    # items could be false, so prefixItems handles all?
+    # contains can add another type.
+    # Prefix sounds like they'd be better as actual named fields.
+    prefix = si.schema['prefixItems']
+    unless prefix.nil?
+      # Opportunity to warn.
+      prefix = prefix[0...max_items] if !max_items.nil? && max_items < prefix.size
+      prefix = prefix.map { |p| Gen.h.dereference(p) }
+    end
+    contains = si.schema['contains']
+    contains = Gen.h.dereference(contains) unless contains.nil?
+    items = si.schema['items']
+    items = Gen.h.dereference(items) unless items.nil?
+    # Opportunity to warn.
+    items = nil if !prefix.nil? && !max_items.nil? && prefix.size == max_items
+    alts = []
+    bases = []
+    if prefix.nil?
+      needs_loop = true
+      is_prefix = [ '// No prefixItems.' ]
+      base_prefix = [ '// No prefixItems.' ]
+    else
+      needs_loop = !max_items.nil? && prefix.size < max_items
+      prefix.each do |p|
+        alts.push(p[:name])
+        bases.push(p)
+      end
+      is_prefix = []
+      base_prefix = []
+      # Prefix schema may be close enough for contains. One derived from another.
+      prefix.size.times do |idx|
+        p = prefix[idx]
+        cont = '// No contains check.'
+        unless contains.nil?
+          if contains[:is] == p[:is]
+            cont = 'else ++contains;'
+          elsif contains['type'] == p['type']
+            cont = "if (#{contains[:is]}(a[#{idx})]) ++contains;"
+          end
+        end
+        s = <<EOB
+if (a.length > #{idx}) {
+  if (!#{p[:is]}(a[#{idx}])) return false;
+  #{cont}
+}
+EOB
+        is_prefix.push(s)
+        base_prefix.push("if (a.length > #{idx}) out.push(#{p[:base]}(a[#{idx}]));")
+      end
+    end
+    # Contains and items may be the same or derive from same.
+    if items.nil?
+      alts.push('any') if max_items.nil? || prefix.size < max_items
+      is_item = ''
+      item_ch = '// No items check, anything allowed.'
+      base_item = 'out.push(x[k]);'
+    else
+      alts.push(items[:name])
+      is_item = items[:is]
+      item_ch = "if (!#{is_item}(a[k])) return false;"
+      base_item = "out.push(#{items[:base]}(x[k]));"
+    end
+    c_incr = '// No contains check.'
+    if contains.nil?
+      cont = '// No contains counter check.'
+      base_cont = '// No contains schema.'
+    else
+      t_min_ch = min_contains.positive? ? "contains < #{min_contains}" : nil
+      t_max_ch = max_contains.nil? ? nil : "#{max_contains} < contains"
+      if !t_min_ch.nil? || !t_max_ch.nil?
+        c_incr = "#{is_item != contains[:is] ? "if (#{contains[:is]}(a[k])) " : ''}++contains;"
+      end
+      cont = [ t_min_ch, t_max_ch ].compact.join(' || ') || '// No contains counter check.'
+      needs_loop = prefix.nil? || max_items.nil? || prefix.size < max_items || !items.nil?
+      base_cont = <<EOB
+if (#{contains[:is]}) {
+  out.push(#{contains[:base]}(a[k]));
+  continue;
+}
+EOB
+    end
+    s = <<EOB
+export type #{si.name} = Array<#{alts.uniq.sort!.join('|')}>;
+
+export function #{si.schema[:is]}(x: unknown): x is #{si.name} {
+  if (!Array.isArray(x))
+    return false;
+  #{min_items.positive? ? "if (#{min_items} < x.length) return false;" : '// No min item limit.'}
+  #{max_items.nil? ? '// No max item limit.' : "if (x.length > #{max_items}) return false;"}
+  const a: Array<any> = x as Array<any>;
+  #{contains.nil? ? '// No contains counter.' : 'let contains = 0;'}
+  #{is_prefix.join("\n")}
+  #{needs_loop ? '' : '/* '}for (let k = #{prefix.nil? ? 0 : prefix.size}; k < a.length; ++k) {
+    #{item_ch}
+    #{c_incr}
+    #{uniq ? '// Uniqueness check not implemented.' : '// Uniqueness not required.'}
+  }#{needs_loop ? '' : ' */'}
+  #{cont}
+  return true;
+}
+
+export function #{si.schema[:unknown]}(x: unknown): #{si.name}  {
+  if (#{si.schema[:is]}(x))
+    return x as #{si.name};
+  throw unknown(x, '#{si.name}');
+}
+
+export function #{si.schema[:base]}(x: #{si.name}): #{si.name} {
+  const out: #{si.name} = [];
+  #{base_prefix.join("\n")}
+  #{needs_loop ? '' : '/* '}for (let k = #{prefix.nil? ? 0 : prefix.size}; k < x.length; ++k) {
+    #{base_cont}
+    #{base_item}
+  }#{needs_loop ? '' : ' */'}
+  return out;
+}
+EOB
+    out.push(s)
+  when 'string'
+    Gen.x.schemas.types.push(si.name)
+    checks = {
+      'maxLength' => "if (value.length > #{si.schema['maxLength']}) throw new Error(`#{si.name} length ${value.length} > #{si.schema['maxLength']}`);",
+      'minLength' => "if (value.length < #{si.schema['minLength']}) throw new Error(`#{si.name} length ${value.length} < #{si.schema['minLength']}`);",
+      'pattern' => "if (!re#{si.name}.test(value)) throw new Error(`#{si.name} value '${value}' does not match pattern ${re#{si.name}.source}`);"
+    }
+    re = si.schema.key?('pattern') ? "const re#{si.name} = new RegExp(atob('#{Base64.strict_encode64(si.schema['pattern'])}')); // #{si.schema['pattern']}" : nil
+    present = checks.keys.map { |k| si.schema.key?(k) ? checks[k] : nil }.compact
+    s = <<EOB
+export type #{si.name} = string;
+
+#{re || '// No content pattern.'}
+export function check#{LuckyCase.pascal_case(si.name)}(value: string): #{si.name} {
+  #{present.join("\n  ")}
+  return value as #{si.name};
+}
+
+export function #{si.schema[:is]}(x: unknown): x is #{si.name} {
+  #{re.nil? ? "return isString(x);" : "if (!isString(x))
+    return false;
+  try {
+    check#{LuckyCase.pascal_case(si.name)}(x as string);
+  }
+  catch {
+    return false;
+  }
+  return true;"}
+}
+
+export function #{si.schema[:unknown]}(x: unknown): #{si.name}  {
+  if (#{si.schema[:is]}(x))
+    return x as #{si.name};
+  throw unknown(x, '#{si.name}');
+}
+
+export function #{si.schema[:base]}(x: #{si.name}): #{si.name} {
+  return x; // String, nothing to do.
+}
+EOB
+    out.push(s)
+  when 'integer', 'number'
+    Gen.x.schemas.types.push(si.name)
+    si.schema[:native] = si.schema['type'] == 'integer' ? :integer : :float
+    checks = {
+      'exclusiveMinimum' => "if (value <= #{si.schema['exclusiveMinimum']}) throw new Error(`#{si.name} value ${value} <= #{si.schema['exclusiveMinimum']}`);",
+      'exclusiveMaximum' => "if (value >= #{si.schema['exclusiveMaximum']}) throw new Error(`#{si.name} value ${value} >= #{si.schema['exclusiveMaximum']}`);",
+      'minimum' => "if (value < #{si.schema['minimum']}) throw new Error(`#{si.name} value ${value} < #{si.schema['minimum']}`);",
+      'maximum' => "if (value > #{si.schema['maximum']}) throw new Error(`#{si.name} value ${value} > #{si.schema['maximum']}`);",
+      'multipleOf' => "if (value % #{si.schema['multipleOf']} !== 0) throw new Error(`#{si.name} value ${value} not a multiple of #{si.schema['multipleOf']}`);"
+    }
+    present = checks.keys.map { |k| si.schema.key?(k) ? checks[k] : nil }.compact
+    present.push("if (!Number.isSafeInteger(value)) throw new Error(`#{si.name} value ${value} is not a safe integer`);") if si.schema[:native] == :integer
+    s = <<EOB
+export type #{si.name} = number;
+
+export function check#{LuckyCase.pascal_case(si.name)}(value: number): #{si.name} {
+  #{present.join("\n  ")}
+  return value as #{si.name};
+}
+
+export function #{si.schema[:is]}(x: unknown): x is #{si.name} {
+  if (!isNumber(x))
+    return false;
+  try {
+    check#{LuckyCase.pascal_case(si.name)}(x as number);
+  }
+  catch {
+    return false;
+  }
+  return true;
+}
+
+export function #{si.schema[:unknown]}(x: unknown): #{si.name}  {
+  if (#{si.schema[:is]}(x))
+    return x as #{si.name};
+  throw unknown(x, '#{si.name}');
+}
+
+export function #{si.schema[:base]}(x: #{si.name}): #{si.name} {
+  return x; // Number, nothing to do.
+}
+EOB
+    out.push(s)
+  when 'boolean'
+    Gen.x.schemas.types.push(si.name)
+    s = <<EOB
+export type #{si.name} = boolean;
+
+export function #{si.schema[:is]}(x: unknown): x is #{si.name} {
+  return isBoolean(x);
+}
+
+export function #{si.schema[:unknown]}(x: unknown): #{si.name}  {
+  if (#{si.schema[:is]}(x))
+    return x as #{si.name};
+  throw unknown(x, '#{si.name}') as #{si.name};
+}
+
+export function #{si.schema[:base]}(x: #{si.name}): #{si.name} {
+  return x; // Boolean, nothing to do.
+}
+EOB
+    out.push(s)
+  else
+    raise StandardError, "Unhandled type: #{si.schema['type']} #{si.schema}"
+  end
+  out.push('')
+end
+Gen.output.join(out)
+%>
+
+// Security requirement types.
+<%=
+out = []
+secs = Gen.doc.dig('components', 'securitySchemes')
+if secs.nil?
+  out.push('// No security schemes.')
+else
+  has_apikey = false
+  secs.each do |sname, scheme|
+    desc = scheme['description']
+    unless desc.nil?
+      desc.strip!
+      if desc.lines.size < 2
+        out.push("// #{desc}")
+      else
+        out.push("/*\n#{desc}\n*/")
+      end
+    end
+    # The configuration should allow a drop-in type as multi-line text.
+    case scheme['type'].downcase
+    when 'apikey'
+      next if has_apikey
+      has_apikey = true
+      scheme[:name] = "SecurityApiKey"
+      scheme[:is] = 'isString'
+      scheme[:base] = 'baseString'
+      scheme[:unknown] = 'unknown2String'
+      Gen.x.schemas.types.push(scheme[:name])
+      out.push("export type #{scheme[:name]} = string;")
+    when 'http'
+      scheme[:name] = "SecurityHttp#{LuckyCase.pascal_case(sname)}"
+      scheme[:is] = 'isObject'
+      scheme[:base] = 'baseObject'
+      scheme[:unknown] = 'unknown2Object'
+      Gen.x.schemas.types.push(scheme[:name])
+      out.push("export type #{scheme[:name]} = Object;")
+    when 'oauth2'
+      # Produce a constant object that contains all data as is.
+      scheme[:name] = "SecurityOAuth2#{LuckyCase.pascal_case(sname)}"
+      scheme[:is] = 'isObject'
+      scheme[:base] = 'baseObject'
+      scheme[:unknown] = 'unknown2Object'
+      Gen.x.schemas.consts.push(scheme[:name])
+      out.push("export const #{scheme[:name]} = #{JSON.pretty_generate(scheme['flows'])}")
+    when 'openidconnect'
+      scheme[:name] = "SecurityOpenIdConnect#{LuckyCase.pascal_case(sname)}"
+      scheme[:is] = 'isString'
+      scheme[:base] = 'baseString'
+      scheme[:unknown] = 'unknown2String'
+      Gen.x.schemas.consts.push(scheme[:name])
+      out.push("export const #{scheme[:name]} = #{JSON.pretty_generate(scheme['openIdConnectUrl'])};")
+    else
+      msg = "Unhandled security scheme type: #{scheme['type']}"
+      out.push("// #{msg}")
+      warn(msg)
+    end
+  end
+end
+Gen.output.join(out)
+%>
+
+// Types for making requests.
+
+export type String2String = Record<string, string>;
+
+// Type for passing extra parameters in addition to operation parameters.
+export type CallExtras = {
+  headers?: String2String;
+  query?: String2String;
+}
+
+const utf8encoder = new TextEncoder();
+const applicationJsonUtf8 = 'application/json; charset=utf-8';
+
+export type EncodedBodyType = string|ArrayBuffer|Uint8Array<ArrayBuffer>|Blob|DataView|File|FormData|URLSearchParams|ReadableStream;
+// Returns body, Content-Type, Content-Length, and additional headers, if any.
+export type EncoderFunction = (body: any) => [body: EncodedBodyType, contentType: string, contentLength: number, headers: String2String];
+
+export function jsonEncode(body: any): [EncodedBodyType, string, number, String2String] {
+    const b = utf8encoder.encode(JSON.stringify(body));
+    return [b, applicationJsonUtf8, b.length, {}];
+}
+
+export function isEncodedBodyType(x: unknown): x is EncodedBodyType {
+  if (ArrayBuffer.isView(x)) return true; // DataView, TypedArray.
+  if (isString(x)) return true;
+  if (x instanceof ArrayBuffer) return true;
+  if (x instanceof Blob) return true; // Blob, File
+  if (x instanceof FormData) return true;
+  if (x instanceof URLSearchParams) return true;
+  if (x instanceof ReadableStream) return true;
+  return false;
+}
+
+export function baseEncodedBodyType(x: unknown): EncodedBodyType {
+  return x as EncodedBodyType;
+}
+
+// Operation parameter types.
+
+<%=
+encoderTypes = Set.new
+json_encoder_names = Set.new
+json_encoders = {}
+out = []
+schemes = Gen.doc.dig('components', 'securitySchemes')
+Gen.doc['paths'].each do |path, path_item_object|
+  oos = OpenAPISourceTools::ApiObjects.operation_objects(path_item_object)
+  oos.each do |method, operation_object|
+    operation_object[:args_name] = "#{LuckyCase.pascal_case(operation_object['operationId'])}Args"
+    Gen.x.schemas.types.push(operation_object[:args_name])
+    operation_object[:args_is] = "is#{operation_object[:args_name]}"
+    operation_object[:args_base] = "base#{operation_object[:args_name]}"
+    Gen.x.schemas.functions.push(operation_object[:args_is])
+    Gen.x.schemas.functions.push(operation_object[:args_base])
+    paraschemas = (operation_object['parameters'] || []).map do |pref|
+      p = Gen.h.dereference(pref)
+      p[:name] = LuckyCase.camel_case(p['name'])
+      s = Gen.h.dereference(p['schema'])
+      {
+        param: p,
+        schema: s
+      }
+    end
+    operation_object[:paraschemas] = paraschemas
+    # Get all common fields and then create all body-type specific variations
+    # using it to ensure the fields remain the same.
+    common = [ '// Parameters:' ]
+    is_func = []
+    base_func = []
+    base_opt_func = []
+    paraschemas.each do |ps|
+      p = ps[:param]
+      common.push("#{p[:name]}#{p['required'] ? '' : '?'}: #{ps[:schema][:name]};")
+      if p['required']
+        is_func.push("if (!#{ps[:schema][:is]}(y.#{p[:name]})) return false;")
+        base_func.push("#{p[:name]}: #{ps[:schema][:base]}(y.#{p[:name]})")
+      else
+        is_func.push("if (y.#{p[:name]} !== undefined && !#{ps[:schema][:is]}(y.#{p[:name]})) return false;")
+        base_opt_func.push("if (y.#{p[:name]} !== undefined) out.#{p[:name]} = #{ps[:schema][:base]}(y.#{p[:name]});")
+      end
+    end
+    common.pop unless common.last.end_with?(';') # Remove comment if no parameters.
+    # No security-related parameters, set like server URLs.
+    # Remove code below once serves no example value.
+    if false
+      common.push('// Security-related:')
+      secs = operation_object['security']
+      optional = secs.size > 1 || !(secs.find { |s| s.empty? }).nil?
+      secs.push({}) if secs.empty?
+      used = Set.new
+      operation_object[:security_params] = []
+      secs.each do |s|
+        next if s.empty?
+        s.keys.sort!.each do |sname|
+          next if used.include?(sname)
+          used.add(sname)
+          scheme = schemes[sname]
+          # API key adds a query or header parameter. Cookie is beyond the scope.
+          # http adds authentication that is placed to Authentication header.
+          # mutualTLS is beyond the scope.
+          # oauth2 specifies flow type, beyond the scope. Check.
+          # openIdConnect specifies URL and is beyond the scope.
+          common.push("#{sname}#{optional ? '?' : ''}: #{scheme[:name]};")
+          if optional
+            is_func.push("if (y.#{sname} !== undefined && !#{scheme[:is]}(y.#{sname})) return false;")
+            base_opt_func.push("if (y.#{sname} !== undefined) out.#{sname} = #{scheme[:base]}(y.#{sname});")
+          else
+            is_func.push("if (!#{scheme[:is]}(y.#{sname})) return false;")
+            base_func.push("#{sname}: #{scheme[:base]}(y.#{sname})")
+          end
+          operation_object[:security_params].push({
+            name: sname,
+            scheme: scheme,
+            optional: optional
+          })
+        end
+        common.pop unless common.last.end_with?(';') # Remove comment if no security members.
+      end
+    end
+    req_body = operation_object['requestBody']
+    if !req_body && common.empty? # Takes nothing whatsoever.
+      s = <<EOB
+// No parameters for #{operation_object['operationId']}.
+export type #{operation_object[:args_name]} = object;
+
+export function #{operation_object[:args_is]}(x: unknown): x is #{operation_object[:args_name]} {
+  return isObject(x);
+}
+
+export function #{operation_object[:args_base]}(x: #{operation_object[:args_name]}): #{operation_object[:args_name]} {
+  return baseObject(x);
+}
+EOB
+      out.push(s)
+      operation_object[:parameterless] = true
+      next
+    end
+
+    # Proper pairing check after encoding can be done since we know the input type. Check
+    # string against what was in the API spec.
+    # Order of checking is specific match to body, instance generic, class specific match,
+    # class generic.
+
+    # Pass also schema name to encoder just to avoid run-time checks provided you trust
+    # the programmer? Maybe other uses? Over-designing?
+
+    body_types = {}
+    body_encodings = {}
+
+    comments = []
+    req = false
+    if req_body
+      req_body[:body_types] = body_types
+      req_body[:body_encodings] = body_encodings
+      req = req_body.fetch('required', false)
+      (req_body['content'] || {}).each do |media_type, mto|
+        mto[:source] = Gen.h.dereference(mto['schema']) || {
+          name: 'any',
+          is: 'isAny',
+          base: 'baseAny',
+          unknown: 'unknown2Any'
+        }
+        body_types[mto[:source][:name]] = mto[:source]
+        mto[:source][:body_name] = "body#{LuckyCase.pascal_case(mto[:source][:name])}"
+        mt = media_type.downcase
+        encs = body_encodings[mto[:source][:body_name]] || Set.new
+        encs.add(mt)
+        body_encodings[mto[:source][:body_name]] = encs
+        comments.push("// content type #{mt}, source type: #{mto[:source][:name]}.")
+      end
+    end
+    operation_object[:body_req] = req
+    body_props = nil
+    has_name = "hasBody#{operation_object[:args_name]}"
+    has_body = nil
+    base_name = "baseBody#{operation_object[:args_name]}"
+    base_body = nil
+    base_snip = nil
+    if body_types.key?('any')
+      bodies = body_types.keys.reject { |k| k == 'any' }.sort!
+      body_props = <<EOB
+  #{bodies.map { |name| "body#{name}?: #{name};" }.join("\n")}
+  body?: any|undefined;
+  encoder?: EncoderFunction;
+  encoded?: EncodedBodyType;
+EOB
+      has_body = <<EOB
+function #{has_name}(x: unknown): boolean {
+  const y = x as #{operation_object[:args_name]};
+  const hasEnc: boolean = y.encoded !== undefined;
+  const encOk: boolean = hasEnc && isEncodedBodyType(y.encoded);
+#{bodies.size.times.map do |idx|
+  name = bodies[idx]
+  s = <<EOC
+  if (y.body#{name} !== undefined) {
+    if (!#{body_types[name][:is]}(y.body#{name})) return false;
+    #{((idx + 1)...bodies.size).each { |k| "if (y.body#{bodies[k]} !== undefined) throw new Error('#{operation_object[:args_name]} has two body members set: body#{name}, body#{bodies[k]}')" }.join("\n")}
+    if (y.body !== undefined && !Object.is(y.body, y.body#{name})) {
+      throw new Error('#{operation_object[:args_name]} body and body#{name} are set to different objects.')
+    }
+    return hasEnc ? encOk : true;
+  }
+EOC
+  s
+end.join("\n")}
+  if (y.body !== undefined) return hasEnc ? encOk : true;
+  return #{req ? 'false' : 'true'};
+}
+EOB
+      body_type = 'any'
+      base_body = <<EOB
+export function #{base_name}(x: unknown): #{body_type} {
+  return x as #{body_type};
+}
+EOB
+      base_snip = <<EOB
+if (y.body !== undefined) out.body = #{base_name}(y.body);
+if (y.encoded !== undefined) out.encoded = baseEncodedBodyType(y.encoded);
+EOB
+    elsif !body_types.empty?
+      bodies = body_types.keys.sort!
+      body_type = body_types.keys.sort!.join('|')
+      body_props = <<EOB
+  #{bodies.map { |name| "body#{name}?: #{name};" }.join("\n")}
+  body?: #{body_type}|undefined;
+  encoder?: EncoderFunction;
+  encoded?: EncodedBodyType;
+EOB
+      has_body = <<EOB
+function #{has_name}(x: unknown): boolean {
+  const y = x as #{operation_object[:args_name]};
+  if (y.encoded !== undefined)
+    return isEncodedBodyType(y.encoded);
+#{bodies.size.times.map do |idx|
+  name = bodies[idx]
+  s = <<EOC
+  if (y.body#{name} !== undefined) {
+    if (!#{body_types[name][:is]}(y.body#{name})) return false;
+    #{((idx + 1)...bodies.size).to_a.map { |k| "if (y.body#{bodies[k]} !== undefined) throw new Error('#{operation_object[:args_name]} has two body members set: body#{name}, body#{bodies[k]}')" }.join("\n")}
+    if (y.body !== undefined && !Object.is(y.body, y.body#{name})) {
+      throw new Error('#{operation_object[:args_name]} body and body#{name} are set to different objects.')
+    }
+    return true;
+  }
+EOC
+  s
+end.join("\n")}
+  if (y.body !== undefined) {
+    #{bodies.map { |name| "if (#{body_types[name][:is]}(y.body)) return true;" }.join("\n") }
+  }
+  return #{req ? 'false' : 'true'};
+}
+EOB
+      base_body = <<EOB
+export function #{base_name}(x: unknown): #{body_type}|undefined {
+  #{body_types.keys.sort!.map { |name| "if (#{body_types[name][:is]}(x)) return #{body_types[name][:base]}(x);" }.join("\n")}
+}
+EOB
+      base_snip = <<EOB
+if (y.encoded !== undefined) out.encoded = baseEncodedBodyType(y.encoded); else
+#{bodies.map { |name| <<EOB
+if (y.body#{name} !== undefined) {
+    out.body#{name} = #{body_types[name][:base]}(y.body#{name});
+    if (y.body !== undefined && Object.is(y.body#{name}, y.body))
+        out.body = out.body#{name};
+} else
+EOB
+}.join("\n")}
+if (y.body !== undefined) out.body = #{base_name}(y.body);
+EOB
+    end
+    out.concat([
+      "export type #{operation_object[:args_name]} = {",
+    ], common,
+      comments,
+    [
+      body_props,
+      '}',
+      has_body,
+      "\nexport function #{operation_object[:args_is]}(x: unknown): x is #{operation_object[:args_name]} {",
+      "if (!isObject(x)) return false;",
+      "const y = x as #{operation_object[:args_name]};"
+    ], is_func, [
+      body_types.empty? ? nil : "if (!#{has_name}(x)) return false;",
+      'return true;',
+      '}',
+      base_body,
+      "\nexport function #{operation_object[:args_base]}(x: unknown): #{operation_object[:args_name]} {",
+      "const y = x as #{operation_object[:args_name]};",
+      "const out: #{operation_object[:args_name]} = {",
+      base_func.join(",\n"),
+      '}'
+    ], base_opt_func, [
+      base_snip,
+      'return out;',
+      '}',
+      ''
+    ])
+  end
+end
+Gen.output.join(out)
+%>
+
+// Types containing Response information.
+
+<%=
+ignore = %w[content-type] # Get from configuration.
+done = {}
+out = []
+Gen.doc.dig('components', 'responses').each do |name, response|
+  # First get info about possible headers type and body types.
+  headers = response['headers'] || {}
+  remain = headers.keys.reject { |h| ignore.include?(h.downcase) }
+  name2type = {}
+  remain.each do |h|
+    s = Gen.h.dereference(Gen.h.dereference(headers[h])['schema'])
+    name2type[h] = {
+      name: LuckyCase.camel_case(h),
+      type: s[:name],
+      schema: s
+    }
+  end
+  content = response['content'] || {}
+  content.each do |media_type, mto|
+    mt = media_type.downcase
+    if mt == 'application/json'
+      mto[:source] = 'any'
+    elsif mt == 'application/octet-stream'
+      mto[:source] = 'Blob'
+    elsif mt.start_with?('text/')
+      mto[:source] = 'string'
+    else
+      mto[:source] = 'Blob'
+    end
+    mto[:decoded] = Gen.h.dereference(mto['schema']) || {
+      name: 'any',
+      is: 'isAny',
+      base: 'baseAny',
+      unknown: 'unknown2Any'
+    }
+  end
+  if remain.empty? && content.empty?
+    response[:name] = 'object'
+    response[:is] = "isObject"
+    response[:base] = "baseObject"
+    response[:unknown] = "unknown2Object"
+    out.push("// Nothing for response #{name}.")
+    next
+  end
+  response[:name2type] = name2type
+  # Type with single property could be treated as the property directly but this
+  # leaves code unchanged if more parameters are added later.
+  # Same for no properties at all.
+  # Short-cuts can be added later.
+  response[:name] = "#{LuckyCase.pascal_case(name)}Response"
+  Gen.x.schemas.types.push(response[:name])
+  defs = []
+  is_func = []
+  base_func = []
+  name2type.each do |h, n2t|
+    defs.push("#{n2t[:name]}: #{n2t[:type]}|null;")
+    is_func.push("if (y.#{n2t[:name]} !== null && !#{n2t[:schema][:is]}(y.#{n2t[:name]})) return false;")
+    base_func.push("#{n2t[:name]}: x.#{n2t[:name]} === null ? null : #{n2t[:schema][:base]}(x.#{n2t[:name]})")
+  end
+  response[:is] = "is#{response[:name]}"
+  response[:base] = "base#{response[:name]}"
+  response[:unknown] = "unknown2#{response[:name]}"
+  Gen.x.schemas.functions.push(response[:is])
+  Gen.x.schemas.functions.push(response[:base])
+  Gen.x.schemas.functions.push(response[:unknown])
+  s = <<EOB
+export type #{response[:name]} = {
+#{defs.join("\n")}
+}
+
+export function #{response[:is]}(x: unknown): x is #{response[:name]} {
+  if (!isObject(x)) return false;
+  const y = x as #{response[:name]};
+#{is_func.join("\n")}
+  return true;
+}
+
+export function #{response[:base]}(x: #{response[:name]}): #{response[:name]} {
+  return {
+#{base_func.join(",\n")}
+  }
+}
+
+export function #{response[:unknown]}(x: unknown): #{response[:name]} {
+  if (#{response[:is]}(x))
+    return x as #{response[:name]};
+  throw unknown(x, '#{response[:name]}');
+}
+EOB
+  out.push(s)
+  # For each body type, if any, extend with the body property.
+  content.each do |media_type, mto|
+    if done.key?(mto[:decoded][:name])
+      out.push("// Content-type #{media_type} covered by #{done[mto[:decoded][:name]]}.\n")
+      next
+    end
+    mto[:name] = "#{response[:name]}#{LuckyCase.pascal_case(mto[:decoded][:name])}"
+    Gen.x.schemas.types.push(mto[:name])
+    mto[:is] = "is#{mto[:name]}"
+    mto[:base] = "base#{mto[:name]}"
+    mto[:unknown] = "unknown2#{mto[:name]}"
+    Gen.x.schemas.functions.push(mto[:is])
+    Gen.x.schemas.functions.push(mto[:base])
+    Gen.x.schemas.functions.push(mto[:unknown])
+    s = <<EOB
+// For content-type #{media_type}
+export type #{mto[:name]} = #{response[:name]} & {
+  body: #{mto[:decoded][:name]};
+}
+
+export function #{mto[:is]}(x: unknown): x is #{mto[:name]} {
+  const y = x as #{mto[:name]};
+  if (y.body === undefined || !#{mto[:decoded][:is]}(y.body)) return false;
+  if (!#{response[:is]}(y)) return false;
+  return true;
+}
+
+export function #{mto[:base]}(x: #{mto[:name]}): #{mto[:name]} {
+  return {
+    ...#{response[:base]}(x),
+    body: #{mto[:decoded][:base]}(x.body)
+  }
+}
+
+export function #{mto[:unknown]}(x: unknown): #{mto[:name]} {
+  if (#{mto[:is]}(x))
+    return x as #{mto[:name]};
+  throw unknown(x, '#{mto[:name]}');
+}
+EOB
+    out.push(s)
+    done[mto[:decoded][:name]] = mto[:name]
+  end
+end
+Gen.output.join(out)
+%>

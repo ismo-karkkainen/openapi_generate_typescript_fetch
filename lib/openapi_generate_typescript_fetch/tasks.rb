@@ -1,10 +1,11 @@
 # frozen_string_literal: true
 
-# Copyright © 2024-2025 Ismo Kärkkäinen
+# Copyright © 2024-2026 Ismo Kärkkäinen
 # Licensed under Universal Permissive License. See LICENSE.txt.
 
+require_relative 'schema' # For templates.
 require 'lucky_case'
-
+require 'uri'
 
 # Namespace for functions with supposedly only internal use.
 module OpenAPIGenerateTypeScriptFetch
@@ -14,14 +15,21 @@ module OpenAPIGenerateTypeScriptFetch
   private_class_method :template_directory
 
   def self.template_names
-    [ # File order is important.
-      'initialize.sh.erb',
+    [ # Consider import order when ordering these files.
+      'package.json.erb',
+      'tsconfig.json.erb',
       'src/helpers.ts.erb',
-      'src/server.ts.erb',
-      'src/types.ts.erb',
-      'src/functions.ts.erb',
+      'src/servers.ts.erb',
+      'src/schemas.ts.erb',
+      'src/shared.ts.erb',
+      'src/callclasses.ts.erb',
       'src/index.ts.erb',
-      'test/index.js.erb'
+      'test/helpers.ts.erb',
+      'test/makers.ts.erb',
+      'test/schemas.ts.erb',
+      'test/shared.ts.erb',
+      'test/servers.ts.erb',
+      'test/callclasses.ts.erb'
     ]
   end
 

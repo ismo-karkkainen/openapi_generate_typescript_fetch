@@ -1,0 +1,109 @@
+<%=
+Gen.output.config = Gen.x.cfg['ts_indentation']
+Gen.x.generator_info
+%>
+
+import {expect} from 'chai';
+import type {<%= Gen.x.servers.import_types.join(', ') %>} from '../src/servers.d.ts';
+import {<%= Gen.x.servers.functions.sort.join(', ') %>} from '../src/servers.js';
+
+<%=
+out = []
+sos = Gen.x.server_data[:server_objects]
+so2checker = Gen.x.server_data[:checkers]
+so2args = Gen.x.server_data[:args]
+sos.each do |so|
+  out.push("describe('#{so2checker[so]}', function () {")
+  if so.variables.empty?
+    s = <<EOB
+  it('Returns server URL', function () {
+    expect(#{so2checker[so]}()).to.equal('#{so.url}');
+  });
+EOB
+    out.push(s)
+  else
+    v2pass = {}.compare_by_identity
+    v2fail = {}.compare_by_identity
+    so.variables.each do |svo|
+      if svo.enum.empty?
+        v2pass[svo] = [ svo.name.upcase ]
+        v2fail[svo] = []
+      else
+        v2pass[svo] = svo.enum
+        ml = svo.enum.map(&:size).max
+        v2fail[svo] = [ 'X' * (ml + 1) ]
+      end
+    end
+    s = <<EOB
+  it('Returns server URL with all arguments set', function () {
+    const args: #{so2args[so]} = {
+      #{so.variables.map { |v| "#{v.name}: '#{v2pass[v].first}'" }.join(",\n")}
+    };
+    const url: string = #{so2checker[so]}(args);
+    #{so.variables.map { |v| "expect(url).to.include('#{v2pass[v].first}');" }.join("\n")}
+  });
+EOB
+    out.push(s)
+    s = <<EOB
+  it('Returns server URL with no optional arguments set', function () {
+    const args: #{so2args[so]} = {
+      #{so.variables.reject { |v| v.default }.map { |v| "#{v.name}: '#{v2pass[v].first}'" }.join(",\n") || '// All optional.'}
+    };
+    const url: string = #{so2checker[so]}(args);
+    #{so.variables.reject { |v| v.default }.map { |v| "expect(url).to.include('#{v2pass[v].first}');" }.join("\n") || '// Nothing without default.'}
+    #{so.variables.reject { |v| v.default.nil? }.map { |v| "expect(url).to.include('#{v.default}');" }.join("\n") || '// Nothing with default.'}
+  });
+EOB
+    out.push(s)
+    # Pass all valid enums other than first.
+    firsts = so.variables.map { |v| "#{v.name}: '#{v2pass[v].first}'" }
+    so.variables.size.times do |chosen|
+      v = so.variables[chosen]
+      v.enum.size.times do |n|
+        next unless n.positive?
+        value = v.enum[n]
+        lines = []
+        so.variables.size.times do |k|
+          if k == chosen
+            lines.push("#{v.name}: '#{value}'")
+          else
+            lines.push(firsts[k])
+          end
+        end
+        s = <<EOB
+  it('Returns server URL with #{v.name} enum #{value}', function () {
+    const args: #{so2args[so]} = {
+      #{lines.join(",\n")}
+    };
+    const url: string = #{so2checker[so]}(args);
+    expect(url).to.include('#{value}');
+  });
+EOB
+        out.push(s)
+      end
+    end
+    # Fail each in turn, if possible.
+    so.variables.size.times do |chosen|
+      v = so.variables[chosen]
+      fails = v2fail[v]
+      next if fails.empty?
+      lines = []
+      so.variables.size.times do |k|
+        value = ((k == chosen) ? fails : v2pass[so.variables[k]]).first
+        lines.push("#{so.variables[k].name}: '#{value}'")
+      end
+      s = <<EOB
+  it('Throws when #{v.name} is #{fails.first}', function () {
+    const args: #{so2args[so]} = {
+      #{lines.join(",\n")}
+    };
+    expect(() => #{so2checker[so]}(args)).to.throw;
+  });
+EOB
+      out.push(s)
+    end
+  end
+  out.push('});')
+end
+Gen.output.join(out)
+%>

@@ -1,5 +1,19 @@
 <%= Gen.x.generator_info %>
 
-export * from './types';
-export * from './functions';
-export * from './server';
+export type {LoaderFunction, LoaderMap} from './helpers.d.ts';
+export type {AllParameters, Shared} from './shared.d.ts';
+export {shared} from './shared.js';
+<%=
+def export_lines(exported_names)
+  lines = []
+  imps = exported_names.import_types
+  lines.push("export type {#{imps.join(', ')}} from './#{exported_names.basename}.d.ts';") unless imps.empty?
+  imps = exported_names.imports
+  lines.push("export {#{imps.join(', ')}} from './#{exported_names.basename}.js';") unless imps.empty?
+  lines
+end
+
+out = []
+out.concat(export_lines(Gen.x.schemas), export_lines(Gen.x.servers), export_lines(Gen.x.callclasses))
+Gen.output.join(out)
+%>

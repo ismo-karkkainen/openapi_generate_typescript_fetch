@@ -2,7 +2,31 @@
 Gen.output.config = Gen.x.cfg['ts_indentation']
 Gen.x.generator_info
 %>
+
+import type {CallExtras} from './schemas.d.ts';
+
 <%=
+# From https://stackoverflow.com/questions/1661197/what-characters-are-valid-for-javascript-variable-names#9337047
+# and later comment.
+# re = Regexp.new('^(?!(?:do|if|in|for|let|new|try|var|case|else|enum|eval|false|null|this|true|void|with|break|catch|class|const|super|throw|while|yield|delete|export|import|public|return|static|switch|typeof|default|extends|finally|package|private|continue|debugger|function|arguments|interface|protected|implements|instanceof)$)[$_\p{Lu}\p{Ll}\p{Lt}\p{Lm}\p{Lo}\p{Nl}][$_\p{Lu}\p{Ll}\p{Lt}\p{Lm}\p{Lo}\p{Nl}\u200C\u200D\p{Mn}\p{Mc}\p{Nd}\p{Pc}]*$')
+def allowed_name(str, default_name)
+  re = Regexp.new('^[$_\p{Lu}\p{Ll}\p{Lt}\p{Lm}\p{Lo}\p{Nl}][$_\p{Lu}\p{Ll}\p{Lt}\p{Lm}\p{Lo}\p{Nl}\u200C\u200D\p{Mn}\p{Mc}\p{Nd}\p{Pc}]*$')
+  ok = []
+  str.each_char do |char|
+    if ok.empty?
+      ok.push(char) if re.match(char)
+    else
+      if re.match('A' + char) # Not first so set something to precede.
+        ok.push(char)
+      else
+        ok.push('_') unless ok.last == '_'
+      end
+    end
+  end
+  ok.pop unless ok.empty? || ok.last != '_'
+  ok.join || default_name
+end
+
 out = []
 # Has any server at top level?
 # Default to server with '/' path.
@@ -14,13 +38,26 @@ overrides = []
 opIds = []
 opId2group = {}
 group2opIds = {}
+security_schemes = {}
+(Gen.doc.dig('components', 'securitySchemes') || {}).each do |name, scheme|
+  security_schemes[name] = OpenAPISourceTools::ApiObjects::SecurityScheme.new(name, scheme)
+end
+security = OpenAPISourceTools::ApiObjects::SecurityAlternatives.new(
+  (Gen.doc['security'] || []).map { |s| OpenAPISourceTools::ApiObjects::SecurityRequirementObject.new(s, security_schemes) },
+  security_schemes)
+security.set_id = 0
+security_overrides = []
+opId2sec_group = {}
+sec_group2opIds = {}
+# Find server alternatives for each path item, or use top-level.
+# Set security for each operation object.
 Gen.doc['paths'].each do |path, path_item|
   servers = path_item['servers']
   if servers.nil?
     srvs = top
   else
     # If servers is exactly as at top level, this keeps it in separate group.
-    # Either servers array is an error or intentional. 
+    # Either servers array is an error or duplication is intentional.
     srvs = OpenAPISourceTools::ApiObjects::ServerAlternatives.new(servers)
     idx = overrides.index(srvs)
     if idx.nil?
@@ -39,6 +76,24 @@ Gen.doc['paths'].each do |path, path_item|
     opIds.push(oid)
     opId2group[oid] = srvs
     group2opIds[srvs.set_id] = group2opIds.fetch(srvs.set_id, []).push(oid)
+    sec = oo['security']
+    if sec.nil?
+      sec = security
+    else
+      sec = OpenAPISourceTools::ApiObjects::SecurityAlternatives.new(
+        sec.map { |s| OpenAPISourceTools::ApiObjects::SecurityRequirementObject.new(s, security_schemes) },
+        security_schemes)
+      idx = security_overrides.index(sec)
+      if idx.nil?
+        security_overrides.push(sec)
+        sec.set_id = security_overrides.size
+      else
+        sec = security_overrides[idx]
+      end
+    end
+    oo[:security] = sec
+    opId2sec_group[oid] = sec
+    sec_group2opIds[sec.set_id] = sec_group2opIds.fetch(sec.set_id, []).push(oid)
   end
 end
 
@@ -61,7 +116,7 @@ consts = Set.new
     else
       so2data[so] = sos[index]
     end
-    so2checker[so] = "serverUrl#{index}" # Figure out a better name, probably exported.
+    so2checker[so] = LuckyCase.camel_case(allowed_name(so.url, "serverUrl#{index}"))
     so.variables.each do |svo|
       consts.add(svo.default)
       svo.enum.each { |e| consts.add(e) }
@@ -86,40 +141,6 @@ end
 # Behind the scenes a mapping from operationId to server URL string?
 Gen.output.join(out)
 %>
-
-// String constants matching each operationId.
-enum OperationIdNames {
-<%= opIds.map { |id| "#{id} = '#{id}'" }.join(",\n") %>
-}
-
-export enum OperationIdIndex {
-<%= opIds.join(",\n") %>
-}
-
-<%= opIds.map { |id| "export const #{id}Url = { url: '' };" }.join("\n") %>
-
-export const operationIdUrls = [
-<%= opIds.map { |id| "  #{id}Url" }.join(",\n") %>
-];
-
-// For use when same server is set for all.
-const allOperationIds = [
-<%= opIds.map { |id| "  OperationIdIndex.#{id}" }.join(",\n") %>
-];
-
-// For use when server is set to every operationId in group.
-const operationIdsByGroupIndex = [
-<%=
-  group2opIds.keys.sort!.map do |gid|
-    "  [ #{group2opIds[gid].sort!.map { |id| "OperationIdIndex.#{id}" }.join(', ')} ]"
-  end.join(",\n")
-%>
-];
-
-// For use when server is set to everything in group by operationId.
-const groupIndexByOperationId = [
-<%= opIds.map { |oid| "  #{opId2group[oid].set_id}" }.join(",\n") %>
-];
 
 <%=
 out = [ '// Server variable enum constants.' ]
@@ -156,7 +177,7 @@ function #{svo2checker[svo]}(value: string|undefined): string {
   if (#{enums2const[key]}.includes(value)) {
     return value;
   }
-  throw new Error(`Invalid value for server variable: ${value}`);
+  throw new Error(`Invalid server variable #{svo.name} value: ${value}`);
 }
 EOB
   end
@@ -167,73 +188,39 @@ Gen.output.join(out)
 %>
 <%=
 out = [ '// Server URL assign argument types and functions.']
+so2args = {}.compare_by_identity
 sos.each do |so|
+  Gen.x.servers.functions.push(so2checker[so])
   if so.variables.empty?
-    out.push("// No URL function for #{so.url}, no variables.")
+    s = <<EOB
+// No variables.
+export function #{so2checker[so]}(): string {
+  return '#{so.url}';
+}
+EOB
+    out.push(s)
     next
   end
-  iname = "Args#{LuckyCase.pascal_case(so2checker[so])}"
+  iname = "#{LuckyCase.pascal_case(so2checker[so])}Args"
+  so2args[so] = iname
+  Gen.x.servers.types.push(iname)
   s = <<EOB
-export interface #{iname} {
-  #{so.variables.map { |v| "#{v.name}: string;" }.join("\n  ")}
+export type #{iname} = {
+  #{so.variables.map { |v| "#{v.name}#{v.default ? '?' : ''}: string;" }.join("\n  ")}
 }
 
 export function #{so2checker[so]}(args: #{iname}): string {
   #{so.variables.map { |v| "const #{v.name} = encodeURIComponent(#{svo2checker[v]}(args.#{v.name}));" }.join("\n  ")}
   return `#{so.url.gsub('{', '${')}`;
 }
-
 EOB
   out.push(s)
 end
+Gen.x.server_data = { # Store for test generation.
+  server_objects: sos,
+  checkers: so2checker,
+  args: so2args
+}
 out = [ '// No server URL compose argument types or functions.'] if out.size == 1
 Gen.output.join(out)
 %>
-
-export function setAllServerUrls(url: string): void {
-  while (url.endsWith('/')) url = url.slice(0, url.length - 2);
-  for (const x of operationIdUrls) {
-    x.url = url;
-  }
-}
-
-export enum AssignmentCover {
-  Operation,
-  Group,
-  All
-}
-
-export function setServerUrl(url: string, operationId: OperationIdIndex, cover: AssignmentCover): void {
-  while (url.endsWith('/')) url = url.slice(0, url.length - 2);
-  switch (cover) {
-    case AssignmentCover.Operation:
-      operationIdUrls[operationId].url = url;
-      break;
-    case AssignmentCover.Group:
-      for (const k of operationIdsByGroupIndex[groupIndexByOperationId[operationId]]) {
-        operationIdUrls[k].url = url;
-      };
-      break;
-    case AssignmentCover.All:
-      setAllServerUrls(url);
-      break;
-    default:
-      throw new Error(`Unhandled AssignmentCover value: ${cover}`)
-      break;
-  }
-}
-
-export function operationIdIndex(id: string): OperationIdIndex|null {
-  switch (id) {
-<%= opIds.map { |id| "case OperationIdNames.#{id}: return OperationIdIndex.#{id};" }.join("\n") %>
-  }
-  return null;
-}
-
-// Possible to add server name assignment with better name?
-// A fixed name would be something in the URL.
-// For now the server name in the return line is the only reasonable clue.
-
-// Add server string assignment function with operationId and cover.
-// Perhaps can make do without generated code, just uses the maps and arrays
-// already defined.

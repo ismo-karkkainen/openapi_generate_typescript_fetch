@@ -1,0 +1,48 @@
+<%=
+tgt = Gen.x.cfg.fetch('target', 'browser')
+defaults = {
+  "main" => "pkg/src/index.js",
+  "files" => [
+    "pkg/src/*.js",
+    "pkg/src/*.d.ts"
+  ],
+  "type" => "module",
+  "scripts" => {
+    "build" => "tsc",
+    "test" => "tsc && mcr mocha pkg/test"
+  }
+}
+devDeps = {
+  "chai" => "6.2.2",
+  "mocha" => "11.7.6",
+  "monocart-coverage-reports" => "2.12.12",
+  "typescript" => "7.0.2",
+  "@types/chai" => "5.2.3",
+  "@types/mocha" => "10.0.10"
+}
+if tgt == 'node'
+  devDeps.merge!({
+    "@types/node" => "24.12.4",
+    "@tsconfig/node-lts" => "24.0.0",
+    "@tsconfig/node-ts" => "23.6.4"    
+  })
+elsif tgt == 'browser'
+  devDeps.merge!({
+    "@types/web" => "0.0.354",
+    "@tsconfig/recommended" => "1.0.13"
+  })
+end
+defaults['devDependencies'] = devDeps
+begin
+  cfg = Gen.x.cfg['package'] || {}
+  cfg = JSON.parse(cfg) unless cfg.is_a?(Hash)
+rescue StandardError => e
+  raise StandardError, "#{OpenAPIGenerateTypeScriptFetch::NAME}: Error parsing package.json: #{e.message}"
+end
+%w[scripts devDependencies].each do |key|
+  next unless cfg.key?(key) && defaults.key?(key)
+  cfg[key].merge!(defaults[key]) { |_key, cfg_value, _default_value| cfg_value }
+end
+cfg.merge!(defaults) { |_key, cfg_value, _default_value| cfg_value }
+Gen.output.pretty_json(cfg)
+%>

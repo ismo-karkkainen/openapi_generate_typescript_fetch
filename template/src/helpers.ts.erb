@@ -3,22 +3,23 @@ Gen.output.config = Gen.x.cfg['ts_indentation']
 Gen.x.generator_info
 %>
 
-import {String2String} from './types';
+import type {String2String,CallExtras} from './schemas.d.ts';
+import type {Shared} from './shared.d.ts';
+import { shared } from './shared.js';
 
-interface Bodyful {
-    body: string;
+
+export interface Bodyful {
+    body?: any;
 }
 
-export function addJsonHeaders(body: string, headers: String2String) {
-    headers['Content-Type'] = 'application/json';
-    headers['Content-Length'] = body.length.toString();
-}
-
-export function addJsonBody(target: Bodyful, body: any, headers: String2String) {
+const jsonBodyEncoder = new TextEncoder;
+export function addJsonBody(target: Bodyful, body: any, headers: String2String): void {
     if (!body)
         return;
-    target.body = JSON.stringify(body);
-    addJsonHeaders(target['body'], headers);
+    const b: Uint8Array = jsonBodyEncoder.encode(JSON.stringify(body));
+    target.body = b;
+    headers['Content-Type'] = 'application/json';
+    headers['Content-Length'] = b.length.toString();
 }
 
 export function str2integer(value: string|null): number|null {
@@ -31,4 +32,160 @@ export function str2float(value: string|null): number|null {
     if (value === null)
         return null;
     return parseFloat(value);
+}
+
+export interface SchemaFunctions {
+    is: (x: unknown) => boolean;
+    base: (x: any) => any;
+}
+
+export interface PartialSchemaFunctions {
+    is: (x: unknown) => boolean;
+    base?: (x: any) => any;
+}
+
+export interface Name2Functions {
+    [key: string]: SchemaFunctions;
+}
+
+export interface PatternFunctions {
+    re: RegExp;
+    funcs: SchemaFunctions;
+}
+
+export interface SchemaCheckers {
+    requiredKeys: Array<string>;
+    required: Name2Functions;
+    optional: Name2Functions;
+    patterns: Array<PatternFunctions>;
+    additional?: PartialSchemaFunctions;
+}
+
+export type String2Any = {
+    [key: string]: any;
+}
+
+export function isSchema(x: object, checkers: SchemaCheckers): boolean {
+    for (const key of checkers.requiredKeys) {
+        if (x[key as keyof object] === undefined)
+            return false;
+    }
+    const keys = Object.keys(x);
+    for (const key of keys) {
+        const v = x[key as keyof object];
+        if (checkers.required[key] !== undefined) {
+            if (!checkers.required[key].is(v))
+                return false;
+            continue;
+        }
+        if (checkers.optional[key] !== undefined) {
+            if (!checkers.optional[key].is(v))
+                return false;
+            continue;
+        }
+        if (checkers.patterns.length > 0) {
+            let patternMatched = false;
+            for (const rf of checkers.patterns) {
+                if (rf.re.test(key)) {
+                    patternMatched = true;
+                    if (!rf.funcs.is(v))
+                        return false;
+                }
+            }
+            if (patternMatched)
+                continue;
+        }
+        if (checkers.additional && !checkers.additional.is(v)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+export function baseSchema(x: object, checkers: SchemaCheckers): String2Any {
+    const keys = Object.keys(x);
+    const out: String2Any = {};
+    for (const key of keys) {
+        const v = x[key as keyof object];
+        if (checkers.required[key] !== undefined) {
+            out[key as keyof String2Any] = checkers.required[key].base(v);
+            continue;
+        }
+        if (checkers.optional[key] !== undefined) {
+            out[key as keyof String2Any] = checkers.optional[key].base(v);
+            continue;
+        }
+        if (checkers.patterns.length > 0) {
+            let patternMatched = false;
+            for (const rf of checkers.patterns) {
+                if (rf.re.test(key)) {
+                    out[key as keyof String2Any] = rf.funcs.base(v);
+                    patternMatched = true;
+                    break;
+                }
+            }
+            if (patternMatched)
+                continue;
+        }
+        if (checkers.additional && checkers.additional.base) {
+            out[key as keyof String2Any] = checkers.additional.base(v);
+        }
+    }
+    return out;
+}
+
+export function setExtras(thisExtras: CallExtras|undefined, extras: CallExtras): CallExtras {
+    const x: CallExtras = {};
+    if (shared.extras?.query || thisExtras?.query || extras.query) {
+        x.query = { ...(shared.extras?.query || {}), ...(thisExtras?.query || {}), ...(extras.query || {}) };
+    }
+    if (shared.extras?.headers || thisExtras?.headers || extras.headers) {
+        x.headers = { ...(shared.extras?.headers || {}), ...(thisExtras?.headers || {}), ...(extras.headers || {}) };
+    }
+    return x;
+}
+
+export function query(out: Array<string>, classExtras: CallExtras|undefined, thisExtras: CallExtras|undefined, forbidden: Array<string>): void {
+    const ex: String2String = { ...(shared.extras?.query || {}), ...(classExtras?.query || {}), ...(thisExtras?.query || {}) };
+    for (const key in ex) {
+        if (forbidden.includes(key)) continue;
+        const value = ex[key];
+        out.push(`${encodeURIComponent(key)}=${encodeURIComponent(value)}`);
+    }
+}
+
+export function headers(out: Headers, classExtras: CallExtras|undefined, thisExtras: CallExtras|undefined, forbidden: Array<string>): Headers {
+    const ex: String2String = { ...(shared.extras?.headers || {}), ...(classExtras?.headers || {}), ...(thisExtras?.headers || {}) };
+    for (const key in ex) {
+        if (forbidden.includes(key)) continue;
+        out.set(key, ex[key]);
+    }
+    return out;
+}
+
+export type LoaderFunction = (response: Response) => Promise<any>;
+export type LoaderMap = Map<string, LoaderFunction>;
+
+function blobLoader(response: Response): Promise<any> {
+    return response.blob();
+}
+
+export function getLoader(contentType: string|null, loaders: LoaderMap|undefined, classArgsLoaders: LoaderMap|undefined, classLoaders: LoaderMap): LoaderFunction {
+    if (!contentType)
+        return blobLoader;
+    let ct = contentType.toLowerCase();
+    const idx = ct.indexOf(';')
+    if (-1 < idx)
+        ct = `${ct.slice(0, idx).trim()}; ${ct.slice(idx + 1).trim()}`;
+    let loader: LoaderFunction|undefined = undefined;
+    if (loaders !== undefined) {
+        loader = loaders.get(ct);
+    }
+    if (loader === undefined && classArgsLoaders !== undefined) {
+        loader = classArgsLoaders.get(ct)
+    }
+    if (loader === undefined) {
+        loader = classLoaders.get(ct);
+    }
+    return loader || blobLoader;
 }

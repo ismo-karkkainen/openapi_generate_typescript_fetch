@@ -7,6 +7,10 @@ Layout/EmptyLinesAroundAttributeAccessor:
   Enabled: false
 Layout/EmptyLines:
   Enabled: false
+Layout/FirstArgumentIndentation:
+  Enabled: false
+Layout/FirstHashElementIndentation:
+  Enabled: false
 Layout/HeredocIndentation:
   Enabled: false
 Layout/SpaceInsideReferenceBrackets:
@@ -52,6 +56,8 @@ Style/YodaCondition:
   Enabled: false
 
 Lint/AmbiguousOperatorPrecedence:
+  Enabled: false
+Lint/NonLocalExitFromIterator:
   Enabled: false
 Lint/RescueException:
   Enabled: false

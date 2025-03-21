@@ -1,0 +1,664 @@
+<%=
+Gen.output.config = Gen.x.cfg['ts_indentation']
+Gen.x.generator_info
+%>
+
+import { expect } from 'chai';
+import * as schemas from '../src/schemas.js';
+import type {<%= Gen.x.schemas.import_types.join(', ') %>} from '../src/schemas.d.ts';
+import {<%= Gen.x.makers.functions.sort.join(', ') %>} from './makers.js';
+
+describe('Basic Type Utility Functions', () => {
+  describe('isNot', () => {
+    it('should return false for anything', () => {
+      expect(schemas.isNot(null)).to.be.false;
+      expect(schemas.isNot(undefined)).to.be.false;
+      expect(schemas.isNot(0)).to.be.false;
+      expect(schemas.isNot('')).to.be.false;
+      expect(schemas.isNot(false)).to.be.false;
+      expect(schemas.isNot({})).to.be.false;
+      expect(schemas.isNot([])).to.be.false;
+    });
+  });
+  describe('Any Utilities', () => {
+    describe('isAny', () => {
+      it('should return true for anything', () => {
+        expect(schemas.isAny(null)).to.be.true;
+        expect(schemas.isAny(undefined)).to.be.true;
+        expect(schemas.isAny(0)).to.be.true;
+        expect(schemas.isAny('')).to.be.true;
+        expect(schemas.isAny(false)).to.be.true;
+        expect(schemas.isAny({})).to.be.true;
+        expect(schemas.isAny([])).to.be.true;
+      });
+    });
+
+    describe('baseAny', () => {
+      it('should return the input as is', () => {
+        expect(schemas.baseAny(null)).to.equal(null);
+        expect(schemas.baseAny(undefined)).to.equal(undefined);
+        expect(schemas.baseAny(0)).to.equal(0);
+        expect(schemas.baseAny('')).to.equal('');
+        expect(schemas.baseAny(false)).to.equal(false);
+        const obj = {};
+        expect(schemas.baseAny(obj)).to.equal(obj);
+        const arr: any[] = [];
+        expect(schemas.baseAny(arr)).to.equal(arr);
+      });
+    });
+
+    describe('unknown2Any', () => {
+      it('should return the input as is', () => {
+        expect(schemas.unknown2Any(null)).to.equal(null);
+        expect(schemas.unknown2Any(undefined)).to.equal(undefined);
+        expect(schemas.unknown2Any(0)).to.equal(0);
+        expect(schemas.unknown2Any('')).to.equal('');
+        expect(schemas.unknown2Any(false)).to.equal(false);
+        const obj = {};
+        expect(schemas.unknown2Any(obj)).to.equal(obj);
+        const arr: any[] = [];
+        expect(schemas.unknown2Any(arr)).to.equal(arr);
+      });
+    });
+  });
+  // From claude-3-7-sonnet-20250219 with minor modifications.
+  // String utility functions
+  describe('String Utilities', () => {
+    describe('isString', () => {
+      it('should return true for string values', () => {
+        expect(schemas.isString('')).to.be.true;
+        expect(schemas.isString('hello')).to.be.true;
+        expect(schemas.isString(String('test'))).to.be.true;
+      });
+
+      it('should return false for non-string values', () => {
+        expect(schemas.isString(123)).to.be.false;
+        expect(schemas.isString(true)).to.be.false;
+        expect(schemas.isString({})).to.be.false;
+        expect(schemas.isString([])).to.be.false;
+        expect(schemas.isString(null)).to.be.false;
+        expect(schemas.isString(undefined)).to.be.false;
+      });
+    });
+
+    describe('unknown2String', () => {
+      it('should return the string when given a string', () => {
+        expect(schemas.unknown2String('')).to.equal('');
+        expect(schemas.unknown2String('hello')).to.equal('hello');
+      });
+
+      it('should throw an error when given a non-string', () => {
+        expect(() => schemas.unknown2String(123)).to.throw;
+        expect(() => schemas.unknown2String(true)).to.throw;
+        expect(() => schemas.unknown2String({})).to.throw;
+        expect(() => schemas.unknown2String(null)).to.throw;
+      });
+    });
+
+    describe('baseString', () => {
+      it('should return the input string', () => {
+        expect(schemas.baseString('')).to.equal('');
+        expect(schemas.baseString('hello')).to.equal('hello');
+        expect(schemas.baseString('123')).to.equal('123');
+      });
+    });
+  });
+
+  // Number utility functions
+  describe('Number Utilities', () => {
+    describe('isNumber', () => {
+      it('should return true for number values', () => {
+        expect(schemas.isNumber(0)).to.be.true;
+        expect(schemas.isNumber(123)).to.be.true;
+        expect(schemas.isNumber(-456)).to.be.true;
+        expect(schemas.isNumber(3.14)).to.be.true;
+        expect(schemas.isNumber(Number('42'))).to.be.true;
+      });
+
+      it('should return false for non-number values', () => {
+        expect(schemas.isNumber('123')).to.be.false;
+        expect(schemas.isNumber(true)).to.be.false;
+        expect(schemas.isNumber({})).to.be.false;
+        expect(schemas.isNumber([])).to.be.false;
+        expect(schemas.isNumber(null)).to.be.false;
+        expect(schemas.isNumber(undefined)).to.be.false;
+        expect(schemas.isNumber(NaN)).to.be.false; // Note: typeof NaN is 'number', but we might want to consider this case
+      });
+    });
+
+    describe('unknown2Number', () => {
+      it('should return the number when given a number', () => {
+        expect(schemas.unknown2Number(0)).to.equal(0);
+        expect(schemas.unknown2Number(123)).to.equal(123);
+        expect(schemas.unknown2Number(-456)).to.equal(-456);
+        expect(schemas.unknown2Number(3.14)).to.equal(3.14);
+      });
+
+      it('should throw an error when given a non-number', () => {
+        expect(() => schemas.unknown2Number('123')).to.throw;
+        expect(() => schemas.unknown2Number(true)).to.throw;
+        expect(() => schemas.unknown2Number({})).to.throw;
+        expect(() => schemas.unknown2Number(null)).to.throw;
+      });
+    });
+
+    describe('baseNumber', () => {
+      it('should return the input number', () => {
+        expect(schemas.baseNumber(0)).to.equal(0);
+        expect(schemas.baseNumber(123)).to.equal(123);
+        expect(schemas.baseNumber(-456)).to.equal(-456);
+        expect(schemas.baseNumber(3.14)).to.equal(3.14);
+      });
+    });
+  });
+
+  // Boolean utility functions
+  describe('Boolean Utilities', () => {
+    describe('isBoolean', () => {
+      it('should return true for boolean values', () => {
+        expect(schemas.isBoolean(true)).to.be.true;
+        expect(schemas.isBoolean(false)).to.be.true;
+        expect(schemas.isBoolean(Boolean(1))).to.be.true;
+      });
+
+      it('should return false for non-boolean values', () => {
+        expect(schemas.isBoolean(0)).to.be.false;
+        expect(schemas.isBoolean(1)).to.be.false;
+        expect(schemas.isBoolean('true')).to.be.false;
+        expect(schemas.isBoolean({})).to.be.false;
+        expect(schemas.isBoolean([])).to.be.false;
+        expect(schemas.isBoolean(null)).to.be.false;
+        expect(schemas.isBoolean(undefined)).to.be.false;
+      });
+    });
+
+    describe('unknown2Boolean', () => {
+      it('should return the boolean when given a boolean', () => {
+        expect(schemas.unknown2Boolean(true)).to.equal(true);
+        expect(schemas.unknown2Boolean(false)).to.equal(false);
+      });
+
+      it('should throw an error when given a non-boolean', () => {
+        expect(() => schemas.unknown2Boolean(0)).to.throw;
+        expect(() => schemas.unknown2Boolean('true')).to.throw;
+        expect(() => schemas.unknown2Boolean({})).to.throw;
+        expect(() => schemas.unknown2Boolean(null)).to.throw;
+      });
+    });
+
+    describe('baseBoolean', () => {
+      it('should return the input boolean', () => {
+        expect(schemas.baseBoolean(true)).to.equal(true);
+        expect(schemas.baseBoolean(false)).to.equal(false);
+      });
+    });
+  });
+
+  // Claude somehow omitted array function tests.
+  // Array utility functions
+  describe('Array Utilities', () => {
+    describe('isArray', () => {
+      it('should return true for array values', () => {
+        expect(schemas.isArray([])).to.be.true;
+        expect(schemas.isArray([1, 2])).to.be.true;
+      })
+      it('should return false for non-arrays', () => {
+        expect(schemas.isArray({ key: 'value' })).to.be.false;
+        expect(schemas.isArray(null)).to.be.false;
+        expect(schemas.isArray(1)).to.be.false;
+        expect(schemas.isArray('str')).to.be.false;
+        expect(schemas.isArray(undefined)).to.be.false;
+        expect(schemas.isArray(true)).to.be.false;
+      })
+    });
+    describe('unknown2Array', () => {
+      it('returns an array when array', () => {
+        const arr = [1, 2];
+        expect(schemas.unknown2Array(arr)).to.deep.equal(arr);
+      });
+      it('throws when not an array', () => {
+        expect(() => schemas.unknown2Array(true)).to.throw;
+        expect(() => schemas.unknown2Array(null)).to.throw;
+        expect(() => schemas.unknown2Array(12)).to.throw;
+        expect(() => schemas.unknown2Array('abc')).to.throw;
+        expect(() => schemas.unknown2Array({})).to.throw;
+        expect(() => schemas.unknown2Array(undefined)).to.throw;
+      });
+    });
+    describe('baseArray', () => {
+      it('should return the input array', () => {
+        const arr = [1, 2];
+        expect(schemas.baseArray(arr)).to.deep.equal(arr);
+        const arr2 = [ 1, { key: 'value' }, arr];
+        expect(schemas.baseArray(arr2)).to.deep.equal(arr2);
+      });
+    });
+  })
+
+  // Object utility functions
+  describe('Object Utilities', () => {
+    describe('isObject', () => {
+      it('should return true for object values', () => {
+        expect(schemas.isObject({})).to.be.true;
+        expect(schemas.isObject({ key: 'value' })).to.be.true;
+        expect(schemas.isObject(new Date())).to.be.true;
+      });
+
+      it('should return false for non-object values', () => {
+        // Arrays and null are objects in JavaScript but function decides otherwise.
+        expect(schemas.isObject([])).to.be.false;
+        expect(schemas.isObject(null)).to.be.false;
+        expect(schemas.isObject(undefined)).to.be.false;
+        expect(schemas.isObject(123)).to.be.false;
+        expect(schemas.isObject('string')).to.be.false;
+        expect(schemas.isObject(true)).to.be.false;
+      });
+    });
+
+    describe('unknown2Object', () => {
+      it('should return the object when given an object', () => {
+        const obj = { key: 'value' };
+        expect(schemas.unknown2Object(obj)).to.equal(obj);
+      });
+
+      it('should throw an error when given a non-object', () => {
+        expect(() => schemas.unknown2Object(123)).to.throw;
+        expect(() => schemas.unknown2Object('string')).to.throw;
+        expect(() => schemas.unknown2Object(true)).to.throw;
+        expect(() => schemas.unknown2Object(null)).to.throw;
+        expect(() => schemas.unknown2Object([ 1, 2 ])).to.throw;
+      });
+    });
+
+    describe('baseObject', () => {
+      it('should return the input object', () => {
+        const obj = { key: 'value' };
+        expect(schemas.baseObject(obj)).to.deep.equal(obj);
+      });
+      it('handles array and object values', () => {
+        const obj = {
+          key: 'value',
+          arr: [1, 2],
+          obj: {
+            key2: 'value2'
+          }
+        };
+        expect(schemas.baseObject(obj)).to.deep.equal(obj);
+      })
+    });
+  });
+});
+
+describe('Request Encoding Utilities', () => {
+  describe('jsonEncode', () => {
+    it('should encode an object as JSON UTF-8 and return the correct tuple', () => {
+      const body = { key: 'value', num: 42 };
+      const [encoded, contentType, length, headers] = schemas.jsonEncode(body);
+      expect(encoded).to.be.instanceOf(Uint8Array);
+      expect(contentType).to.equal('application/json; charset=utf-8');
+      const expectedBytes = new TextEncoder().encode(JSON.stringify(body));
+      expect(length).to.equal(expectedBytes.length);
+      expect(headers).to.deep.equal({});
+      expect(encoded).to.deep.equal(expectedBytes);
+    });
+
+    it('should encode a string body', () => {
+      const body = 'hello world';
+      const [encoded, contentType, length, headers] = schemas.jsonEncode(body);
+      expect(encoded).to.be.instanceOf(Uint8Array);
+      expect(contentType).to.equal('application/json; charset=utf-8');
+      const expectedBytes = new TextEncoder().encode(JSON.stringify(body));
+      expect(length).to.equal(expectedBytes.length);
+      expect(headers).to.deep.equal({});
+      expect(encoded).to.deep.equal(expectedBytes);
+    });
+
+    it('should encode a number body', () => {
+      const body = 123;
+      const [encoded, contentType, length, headers] = schemas.jsonEncode(body);
+      expect(encoded).to.be.instanceOf(Uint8Array);
+      expect(contentType).to.equal('application/json; charset=utf-8');
+      expect(length).to.equal((encoded as Uint8Array).length);
+      expect(headers).to.deep.equal({});
+    });
+
+    it('should encode an array body', () => {
+      const body = [1, 'two', true, null];
+      const [encoded, contentType, length, headers] = schemas.jsonEncode(body);
+      expect(encoded).to.be.instanceOf(Uint8Array);
+      expect(contentType).to.equal('application/json; charset=utf-8');
+      const expectedBytes = new TextEncoder().encode(JSON.stringify(body));
+      expect(length).to.equal(expectedBytes.length);
+      expect(headers).to.deep.equal({});
+    });
+
+    it('should encode null', () => {
+      const [encoded, contentType, length, headers] = schemas.jsonEncode(null);
+      expect(encoded).to.be.instanceOf(Uint8Array);
+      expect(contentType).to.equal('application/json; charset=utf-8');
+      expect(length).to.equal((encoded as Uint8Array).length);
+      expect(headers).to.deep.equal({});
+    });
+
+    it('should encode a nested object', () => {
+      const body = { a: { b: { c: [1, 2, 3] } } };
+      const [encoded, contentType, length, headers] = schemas.jsonEncode(body);
+      expect(encoded).to.be.instanceOf(Uint8Array);
+      expect(contentType).to.equal('application/json; charset=utf-8');
+      const expectedBytes = new TextEncoder().encode(JSON.stringify(body));
+      expect(length).to.equal(expectedBytes.length);
+      expect(headers).to.deep.equal({});
+      expect(encoded).to.deep.equal(expectedBytes);
+    });
+  });
+
+  describe('isEncodedBodyType', () => {
+    it('should return true for a string', () => {
+      expect(schemas.isEncodedBodyType('hello')).to.be.true;
+      expect(schemas.isEncodedBodyType('')).to.be.true;
+    });
+
+    it('should return true for an ArrayBuffer', () => {
+      expect(schemas.isEncodedBodyType(new ArrayBuffer(8))).to.be.true;
+    });
+
+    it('should return true for a Uint8Array (TypedArray / ArrayBufferView)', () => {
+      expect(schemas.isEncodedBodyType(new Uint8Array(4))).to.be.true;
+    });
+
+    it('should return true for a DataView (ArrayBufferView)', () => {
+      expect(schemas.isEncodedBodyType(new DataView(new ArrayBuffer(8)))).to.be.true;
+    });
+
+    it('should return true for a Blob', () => {
+      expect(schemas.isEncodedBodyType(new Blob([]))).to.be.true;
+    });
+
+    it('should return true for a File (subclass of Blob)', () => {
+      expect(schemas.isEncodedBodyType(new File([], 'test.txt'))).to.be.true;
+    });
+
+    it('should return true for FormData', () => {
+      expect(schemas.isEncodedBodyType(new FormData())).to.be.true;
+    });
+
+    it('should return true for URLSearchParams', () => {
+      expect(schemas.isEncodedBodyType(new URLSearchParams())).to.be.true;
+    });
+
+    it('should return true for a ReadableStream', () => {
+      expect(schemas.isEncodedBodyType(new ReadableStream())).to.be.true;
+    });
+
+    it('should return false for a number', () => {
+      expect(schemas.isEncodedBodyType(42)).to.be.false;
+    });
+
+    it('should return false for a boolean', () => {
+      expect(schemas.isEncodedBodyType(true)).to.be.false;
+      expect(schemas.isEncodedBodyType(false)).to.be.false;
+    });
+
+    it('should return false for null', () => {
+      expect(schemas.isEncodedBodyType(null)).to.be.false;
+    });
+
+    it('should return false for undefined', () => {
+      expect(schemas.isEncodedBodyType(undefined)).to.be.false;
+    });
+
+    it('should return false for a plain object', () => {
+      expect(schemas.isEncodedBodyType({ key: 'value' })).to.be.false;
+    });
+
+    it('should return false for an array', () => {
+      expect(schemas.isEncodedBodyType([1, 2, 3])).to.be.false;
+    });
+  });
+
+  describe('baseEncodedBodyType', () => {
+    it('should return a string as-is', () => {
+      const s = 'hello';
+      expect(schemas.baseEncodedBodyType(s)).to.equal(s);
+    });
+
+    it('should return a Uint8Array as-is', () => {
+      const buf = new Uint8Array([1, 2, 3]);
+      expect(schemas.baseEncodedBodyType(buf)).to.equal(buf);
+    });
+
+    it('should return an ArrayBuffer as-is', () => {
+      const ab = new ArrayBuffer(8);
+      expect(schemas.baseEncodedBodyType(ab)).to.equal(ab);
+    });
+
+    it('should return a Blob as-is', () => {
+      const blob = new Blob(['data']);
+      expect(schemas.baseEncodedBodyType(blob)).to.equal(blob);
+    });
+
+    it('should return FormData as-is', () => {
+      const fd = new FormData();
+      expect(schemas.baseEncodedBodyType(fd)).to.equal(fd);
+    });
+
+    it('should return URLSearchParams as-is', () => {
+      const usp = new URLSearchParams('key=value');
+      expect(schemas.baseEncodedBodyType(usp)).to.equal(usp);
+    });
+
+    it('should return a ReadableStream as-is', () => {
+      const rs = new ReadableStream();
+      expect(schemas.baseEncodedBodyType(rs)).to.equal(rs);
+    });
+  });
+});
+
+
+
+// Types and checker functions.
+<%=
+out = []
+sis = Gen.x.order
+sis.each do |si|
+  # This should just loop over pass and fail functions and make expects as appropriate.
+  out.push("describe('#{si.name}', function () {")
+  out.push("  it('#{si.schema[:is]}', function () {")
+  si.schema[:pass].each do |fn|
+    out.push("    expect(schemas.#{si.schema[:is]}(#{fn}())).to.be.true;")
+  end
+  si.schema[:fail].each do |fn|
+    out.push("    expect(schemas.#{si.schema[:is]}(#{fn}())).to.be.false;")
+  end
+  si.schema[:typefail].each do |fn|
+    out.push("    expect(schemas.#{si.schema[:is]}(#{fn}())).to.be.false;")
+  end
+  out.push("  });")
+  out.push("  it('#{si.schema[:unknown]}', function () {")
+  si.schema[:pass].each do |fn|
+    out.push("    expect(schemas.#{si.schema[:unknown]}(#{fn}())).to.deep.equal(#{fn}());")
+  end
+  si.schema[:fail].each do |fn|
+    out.push("    expect(() => schemas.#{si.schema[:unknown]}(#{fn}())).to.throw;")
+  end
+  out.push("  });")
+  out.push("  it('#{si.schema[:base]}', function () {")
+  # Does not strip something useful.
+  si.schema[:pass].each do |fn|
+    out.push("    expect(schemas.#{si.schema[:base]}(#{fn}())).to.deep.equal(#{fn}());")
+  end
+  if si.schema.key?(:obj)
+    unknowns = si.schema[:obj].unknown_names || []
+    unknowns.each do |name|
+      si.schema[:pass].each do |fn|
+        out.push("    expect(schemas.#{si.schema[:base]}({ ...#{fn}(), #{name}: true } as any as #{si.name})).to.deep.equal(#{fn}());")
+      end
+    end
+  end
+  out.push("  });")
+  out.push("});")
+  out.push('')
+end
+Gen.output.join(out)
+%>
+
+// Operation parameter type tests.
+<%=
+out = []
+Gen.doc['paths'].each do |path, path_item_object|
+  oos = OpenAPISourceTools::ApiObjects.operation_objects(path_item_object)
+  oos.each do |method, operation_object|
+    out.push("describe('#{operation_object[:args_name]}', function () {")
+    out.push("  it('#{operation_object[:args_is]}', function () {")
+    operation_object[:pass].each do |fn|
+      out.push("    expect(schemas.#{operation_object[:args_is]}(#{fn}())).to.be.true;")
+    end
+    operation_object[:fail].each do |fn|
+      out.push("    expect(schemas.#{operation_object[:args_is]}(#{fn}())).to.be.false;")
+    end
+    operation_object[:typefail].each do |fn|
+      out.push("    expect(schemas.#{operation_object[:args_is]}(#{fn}())).to.be.false;")
+    end
+    operation_object[:throw].each do |fn|
+      out.push("    expect(() => schemas.#{operation_object[:args_is]}(#{fn}())).to.throw;")
+    end
+    out.push("  });")
+    operation_object[:pass].each do |fn|
+    out.push("")
+      s = <<EOB
+  it('#{operation_object[:args_base]} #{fn}', function () {
+    const src = #{fn}();
+    const keys = Object.keys(src);
+    const dst = schemas.#{operation_object[:args_base]}(src);
+    if (keys.includes('encoded')) {
+      // All body-properties have been dropped.
+      const bodies = keys.filter((name: string): boolean => name.startsWith('body'));
+      for (const name of bodies) {
+        expect(dst).not.to.have.property(name);
+        const d: object = dst as object;
+        const s: object = src as object;
+        d[name as keyof object] = s[name as keyof object]; // Put back for simpler testing.
+      }
+    }
+    expect(dst).to.deep.equal(src);
+  });
+EOB
+      out.push(s)
+    end
+    out.push("});")
+    out.push('')
+  end
+end
+Gen.output.join(out)
+%>
+
+// Operation response base types tests.
+<%=
+out = []
+Gen.doc.dig('components', 'responses').each do |name, response|
+  name2type = response[:name2type]
+  next if name2type.nil?
+  out.push("describe('#{response[:name]}', function () {")
+  out.push("  it('#{response[:is]}', function () {")
+  response[:pass].each do |fn|
+    out.push("    expect(schemas.#{response[:is]}(#{fn}())).to.be.true;")
+  end
+  response[:fail].each do |fn|
+    out.push("    expect(schemas.#{response[:is]}(#{fn}())).to.be.false;")
+  end
+  response[:typefail].each do |fn|
+    out.push("    expect(schemas.#{response[:is]}(#{fn}())).to.be.false;")
+  end
+  response[:null].each do |fn|
+    out.push("    expect(schemas.#{response[:is]}(#{fn}())).to.be.true;")
+  end
+  out.push("  });")
+  out.push("  it('#{response[:unknown]}', function () {")
+  response[:pass].each do |fn|
+    out.push("    expect(schemas.#{response[:unknown]}(#{fn}())).to.deep.equal(#{fn}());")
+  end
+  response[:fail].each do |fn|
+    out.push("    expect(() => schemas.#{response[:unknown]}(#{fn}())).to.throw;")
+  end
+  response[:typefail].each do |fn|
+    out.push("    expect(() => schemas.#{response[:unknown]}(#{fn}())).to.throw;")
+  end
+  response[:null].each do |fn|
+    out.push("    expect(schemas.#{response[:unknown]}(#{fn}())).to.deep.equal(#{fn}());")
+  end
+  out.push("  });")
+  mismatches = []
+  max_len = name2type.values.map { |n2t| n2t[:name].size }.max || 0
+  mismatches.push('a' * (max_len + 1))
+  min_len = name2type.values.map { |n2t| n2t[:name].size }.min || 0
+  mismatches.push('a' * (min_len - 1)) if min_len > 1
+  unless mismatches.empty?
+    response[:mismatches] = mismatches
+    out.push("  it('#{response[:base]}', function () {")
+    mismatches.each do |name|
+      response[:pass].each do |fn|
+        out.push("    expect(schemas.#{response[:base]}({ ...#{fn}(), #{name}: true } as any as #{response[:name]})).to.deep.equal(#{fn}());")
+      end
+    end
+    out.push("  });")
+  end
+  out.push("});")
+  out.push('')
+end
+Gen.output.join(out)
+%>
+
+// Operation response body types tests.
+<%=
+out = []
+Gen.doc.dig('components', 'responses').each do |name, response|
+  name2type = response[:name2type]
+  next if name2type.nil?
+  content = response['content'] || {}
+  content.each do |media_type, mto|
+    next unless mto.key?(:name)
+    out.push("describe('#{mto[:name]}', function () {")
+    out.push("  it('#{mto[:is]}', function () {")
+    mto[:pass].each do |fn|
+      out.push("    expect(schemas.#{mto[:is]}(#{fn}())).to.be.true;")
+    end
+    mto[:fail].each do |fn|
+      out.push("    expect(schemas.#{mto[:is]}(#{fn}())).to.be.false;")
+    end
+    mto[:typefail].each do |fn|
+      out.push("    expect(schemas.#{mto[:is]}(#{fn}())).to.be.false;")
+    end
+    out.push("  });")
+    mismatches = response[:mismatches]
+    if mismatches.nil?
+      mismatches = %w[bod bodyy] # We know the added field name is body.
+    else
+      used = name2type.values.map { |n2t| n2t[:name] }
+      %w[bod bodyy].each do |cand|
+        mismatches.push(cand) unless used.include?(cand) or mismatches.include?(cand)
+      end
+    end
+    out.push("  it('#{mto[:base]}', function () {")
+    mismatches.each do |name|
+      mto[:pass].each do |fn|
+        out.push("    expect(schemas.#{mto[:base]}({ ...#{fn}(), #{name}: true } as any as #{mto[:name]})).to.deep.equal(#{fn}());")
+      end
+    end
+    out.push("  });")
+    out.push("  it('#{mto[:unknown]}', function () {")
+    mto[:pass].each do |fn|
+      out.push("    expect(schemas.#{mto[:unknown]}(#{fn}())).to.deep.equal(#{fn}());")
+    end
+    mto[:fail].each do |fn|
+      out.push("    expect(() => schemas.#{mto[:unknown]}(#{fn}())).to.throw;")
+    end
+    mto[:typefail].each do |fn|
+      out.push("    expect(() => schemas.#{mto[:unknown]}(#{fn}())).to.throw;")
+    end
+    out.push("  });")
+    out.push("});")
+    out.push('')
+  end
+end
+Gen.output.join(out)
+%>

@@ -1,0 +1,107 @@
+<%=
+Gen.output.config = Gen.x.cfg['ts_indentation']
+Gen.x.generator_info
+%>
+
+import {expect} from 'chai';
+import type { AllParameters, Shared } from '../src/shared.d.ts';
+import { shared } from '../src/shared.js';
+import { <%= Gen.x.shared.functions.join(', ') %> } from '../src/shared.js';
+import type {CallExtras, String2String, <%= Gen.x.schemas.import_types.join(', ') %>} from '../src/schemas.d.ts';
+import {<%= Gen.x.schemas.functions.join(', ') %>} from '../src/schemas.js';
+
+
+// Fluffy scripting languages allow this despite types, handy.
+function orderlyGarbage(plain: boolean): AllParameters {
+    const out: AllParameters = {
+<%=
+out = []
+Gen.doc[:all_params].each do |name, types|
+  ti = types.first
+  out.push("#{name}: '#{name}' as any as #{ti[:type]}") unless ti[:majority]
+end
+out.join(",\n")
+%>
+    };
+<%=
+out = []
+Gen.doc[:all_params].each do |name, types|
+  ti = types.first
+  next unless ti[:majority]
+  next unless name == ti[:name]
+  typed = ti[:shared]
+  out.push("if (plain) out.#{name} = '#{name}' as any as #{ti[:type]}; else out.#{typed} = '#{typed}' as any as #{ti[:type]};")
+end
+Gen.output.join(out)
+%>
+    return out;
+}
+
+describe('orderlyGarbage', function () {
+  it('majority, unique', function () {
+    const r = orderlyGarbage(true);
+    const names: Array<string> = Object.keys(r);
+    for (const name of names) {
+      expect(r).to.have.property(name, name);
+      for (const other of names) {
+        if (name == other) continue;
+        expect(r).to.have.property(other).not.to.equal(name);
+      }
+    }
+  });
+  it('no majority, unique', function () {
+    const r = orderlyGarbage(false);
+    const names: Array<string> = Object.keys(r);
+    for (const name of names) {
+      expect(r).to.have.property(name, name);
+      for (const other of names) {
+        if (name == other) continue;
+        expect(r).to.have.property(other).not.to.equal(name);
+      }
+    }
+  });
+});
+
+<%=
+out = []
+Gen.doc['paths'].each do |path, path_item_object|
+  oos = OpenAPISourceTools::ApiObjects.operation_objects(path_item_object)
+  oos.each do |method, operation_object|
+    next if operation_object[:parameterless]
+    shared_func = operation_object[:shared]
+    related = []
+    Gen.doc[:all_params].each_value do |types|
+      types.each do |ti|
+        related.push(ti) if ti[:ooid] == operation_object.object_id
+      end
+    end
+    out.push("describe('#{shared_func}', function () {")
+    typed = related.map do |ti|
+      "expect(r).to.have.property('#{ti[:name]}', '#{ti[:shared]}');"
+    end.uniq
+    plain = related.map do |ti|
+      "expect(r).to.have.property('#{ti[:name]}', '#{ti[ti[:majority] ? :name : :shared]}');"
+    end.uniq
+    s = <<EOB
+  it('no majority', function () {
+    shared.params = orderlyGarbage(false);
+    const r = #{shared_func}();
+    #{typed.join("\n")}
+  });
+  it('majority', function () {
+    shared.params = orderlyGarbage(true);
+    const r = #{shared_func}();
+    #{plain.join("\n")}
+  });
+  it('both', function () {
+    shared.params = { ...orderlyGarbage(false), ...orderlyGarbage(true) };
+    const r = #{shared_func}();
+    #{typed.join("\n")}
+  });
+EOB
+    out.push(s)
+    out.push("});")
+  end
+end
+Gen.output.join(out)
+%>

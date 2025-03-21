@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-source 'http://www.rubygems.org'
+source 'https://www.rubygems.org'
 
 gem 'lucky_case', '~> 1.1', '>= 1.1.0'
 gem 'rake', '~> 13.0', '>= 13.0.6'
