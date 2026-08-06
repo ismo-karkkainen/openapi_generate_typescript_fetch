@@ -28,11 +28,6 @@ task :uninstall do
   sh "gem uninstall --executables #{ogtf}"
 end
 
-desc 'Test.'
-task :test do
-  sh './test.sh'
-end
-
 RuboCop::RakeTask.new(:lint) do |t|
   t.patterns = [ 'lib', "#{ogtf}.gemspec" ]
 end

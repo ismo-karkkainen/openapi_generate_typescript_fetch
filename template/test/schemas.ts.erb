@@ -619,13 +619,13 @@ Gen.doc.dig('components', 'responses').each do |name, response|
     next unless mto.key?(:name)
     out.push("describe('#{mto[:name]}', function () {")
     out.push("  it('#{mto[:is]}', function () {")
-    mto[:pass].each do |fn|
+    (mto[:pass] || []).each do |fn|
       out.push("    expect(schemas.#{mto[:is]}(#{fn}())).to.be.true;")
     end
-    mto[:fail].each do |fn|
+    (mto[:fail] || []).each do |fn|
       out.push("    expect(schemas.#{mto[:is]}(#{fn}())).to.be.false;")
     end
-    mto[:typefail].each do |fn|
+    (mto[:typefail] || []).each do |fn|
       out.push("    expect(schemas.#{mto[:is]}(#{fn}())).to.be.false;")
     end
     out.push("  });")
@@ -640,19 +640,19 @@ Gen.doc.dig('components', 'responses').each do |name, response|
     end
     out.push("  it('#{mto[:base]}', function () {")
     mismatches.each do |name|
-      mto[:pass].each do |fn|
+      (mto[:pass] || []).each do |fn|
         out.push("    expect(schemas.#{mto[:base]}({ ...#{fn}(), #{name}: true } as any as #{mto[:name]})).to.deep.equal(#{fn}());")
       end
     end
     out.push("  });")
     out.push("  it('#{mto[:unknown]}', function () {")
-    mto[:pass].each do |fn|
+    (mto[:pass] || []).each do |fn|
       out.push("    expect(schemas.#{mto[:unknown]}(#{fn}())).to.deep.equal(#{fn}());")
     end
-    mto[:fail].each do |fn|
+    (mto[:fail] || []).each do |fn|
       out.push("    expect(() => schemas.#{mto[:unknown]}(#{fn}())).to.throw;")
     end
-    mto[:typefail].each do |fn|
+    (mto[:typefail] || []).each do |fn|
       out.push("    expect(() => schemas.#{mto[:unknown]}(#{fn}())).to.throw;")
     end
     out.push("  });")

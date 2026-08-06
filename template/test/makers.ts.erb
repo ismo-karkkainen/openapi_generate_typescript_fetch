@@ -40,7 +40,7 @@ def surround(value, is_integer, multipleOf)
   return [ nil, nil, nil ] if value.nil?
   return [ value - multipleOf, value, value + multipleOf ] unless multipleOf.nil?
   return [ value - 1, value, value + 1 ] if is_integer
-  value = Float.new(value) unless value.is_a?(Float)
+  value = Float(value) unless value.is_a?(Float)
   [ value.prev_float, value, value.next_float ]
 end
 
@@ -219,7 +219,7 @@ sis.each do |si|
         end
       end
     else
-      max_val = si.schema.fetch('maximum', si.schema['exclusiveMaximum'])
+      min_val = si.schema.fetch('minimum', si.schema['exclusiveMinimum'])
       max_val = si.schema.fetch('maximum', si.schema['exclusiveMaximum'])
       mo = si.schema.key('multipleOf') ? si.schema['multipleOf'].abs : nil
       mins = surround(min_val, false, mo)
@@ -1167,8 +1167,8 @@ Gen.doc.dig('components', 'responses').each do |name, response|
       commons[common.join(';')] = { common: common, kind: kind }
     end
   end
-  commons['empty'] = { common: [], kind: :pass } if commons.empty?
-  commons.each_value do |cc|
+  #commons['empty'] = { common: [], kind: :fail } if commons.empty?
+  (commons.values || []).each do |cc|
     common = cc[:common]
     category = cc[:kind]
     make_name(response, category, response[:name])

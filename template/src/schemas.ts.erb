@@ -195,6 +195,8 @@ EOB
     kreq = []
     os.props.select { |p| !p.pattern && !p.additional }.each do |p|
       ps = Gen.h.dereference(p.spec)
+      # oneOf support requires that preq/popt item can be an array of hashes.
+      warn("Property '#{p.name}' type '#{p.type}' has nil schema, fully proicessed source?") if ps.nil?
       o.push("#{p.name}#{p.req ? '' : '?'}: #{p.type};")
       (p.req ? preq : popt).push({
         name: p.name,
@@ -366,8 +368,8 @@ export type #{si.name} = Array<#{alts.uniq.sort!.join('|')}>;
 export function #{si.schema[:is]}(x: unknown): x is #{si.name} {
   if (!Array.isArray(x))
     return false;
-  #{min_items.positive? ? "if (#{min_items} < x.length) return false;" : '// No min item limit.'}
-  #{max_items.nil? ? '// No max item limit.' : "if (x.length > #{max_items}) return false;"}
+  #{min_items.positive? ? "if (x.length < #{min_items}) return false;" : '// No min item limit.'}
+  #{max_items.nil? ? '// No max item limit.' : "if (#{max_items} < x.length) return false;"}
   const a: Array<any> = x as Array<any>;
   #{contains.nil? ? '// No contains counter.' : 'let contains = 0;'}
   #{is_prefix.join("\n")}
@@ -416,7 +418,7 @@ export function check#{LuckyCase.pascal_case(si.name)}(value: string): #{si.name
 }
 
 export function #{si.schema[:is]}(x: unknown): x is #{si.name} {
-  #{re.nil? ? "return isString(x);" : "if (!isString(x))
+  #{present.empty? ? "return isString(x);" : "if (!isString(x))
     return false;
   try {
     check#{LuckyCase.pascal_case(si.name)}(x as string);
@@ -493,7 +495,7 @@ export function #{si.schema[:is]}(x: unknown): x is #{si.name} {
 export function #{si.schema[:unknown]}(x: unknown): #{si.name}  {
   if (#{si.schema[:is]}(x))
     return x as #{si.name};
-  throw unknown(x, '#{si.name}') as #{si.name};
+  throw unknown(x, '#{si.name}');
 }
 
 export function #{si.schema[:base]}(x: #{si.name}): #{si.name} {
@@ -502,7 +504,7 @@ export function #{si.schema[:base]}(x: #{si.name}): #{si.name} {
 EOB
     out.push(s)
   else
-    raise StandardError, "Unhandled type: #{si.schema['type']} #{si.schema}"
+    raise StandardError, "Unhandled type: '#{si.schema['type']}' in #{si.name}"
   end
   out.push('')
 end
@@ -617,6 +619,7 @@ out = []
 schemes = Gen.doc.dig('components', 'securitySchemes')
 Gen.doc['paths'].each do |path, path_item_object|
   oos = OpenAPISourceTools::ApiObjects.operation_objects(path_item_object)
+  next if oos.empty?
   oos.each do |method, operation_object|
     operation_object[:args_name] = "#{LuckyCase.pascal_case(operation_object['operationId'])}Args"
     Gen.x.schemas.types.push(operation_object[:args_name])

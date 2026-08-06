@@ -35,6 +35,10 @@ module OpenAPIGenerateTypeScriptFetch
       return d unless d.zero?
       @spec <=> other.spec
     end
+
+    def to_s
+      "ObjectSchemaProperty(name: #{@name}, req: #{@req}, type: #{@type}, pattern: #{@pattern}, additional: #{@additional}, spec: #{@spec})"
+    end
   end
 
   # Common info about schema, used in multiple places so gathered here to shorten templates.
