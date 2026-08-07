@@ -36,20 +36,56 @@ Security parameters are intentionally omitted. For whatever you need, use extras
 
 Configuration files are YAML files or anything the YAML library can parse. The configuration file default prefix name is `openapi_generate_typescript_fetch`. See openapi-sourcetools configuration loading for more information.
 
-Key "subdir" is optional and holds a string that specifies the subdirectory under the output directory specified in openapi-generate command-line arguments.
+Key `target` holds the generation target, either `browser` or `node`.
 
-Key "copy" is intended for license files and others that are to be copied as is. It holds an array of records that specify:
+Key `subdir` is optional and holds a string that specifies the subdirectory under the output directory specified in openapi-generate command-line arguments.
 
-- content: The actual content string to be copied.
-- source: Name of the file to be copied. Used if content is not present.
-- target: The destination file name with path. If given, "subdir" is prepended to the target path.
+Key `copy` is intended for license files and others that are to be copied as is. It holds an array of records that specify:
 
-Key "copyright" is for a copyright text block that is included in the generated files.
+- `content`: The actual content string to be copied.
+- `source`: Name of the file to be copied. Used if content is not present.
+- `target`: The destination file name with path. If given, `subdir` is prepended to the target path.
 
-Under "tests" is expected to be the output of openapi-patterntests.
+Key `copyright` is for a copyright text block that is included in the generated files.
+
+Under `tests` is expected to be the output of openapi-patterntests with needed manual changes.
+
+An example configuration with target, added script for package.json, and test strings for a string pattern. 
+
+```yaml
+target: 'browser'
+package:
+  scripts:
+    coverage: "tsc && NODE_V8_COVERAGE=coverage mocha pkg/test"
+tests:
+  patterns:
+  - pattern: "^.+$"
+    minLength: 1
+    maxLength: 64
+    pass:
+    - 'alskjdfhgaolsdhj'
+    - p
+    - pppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp
+    fail:
+    - ''
+    - fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+```
+
+## Usage
+
+See the quick start to get generation source document from you API as described in README.md of [openapi-sourcetools](https://github.com/ismo-karkkainen/openapi-sourcetools).
+
+To run the actual generation using this gem, run:
+
+```sh
+openapi-generate --input generation_source_document.yaml --outdir package-dir config:package_cfg req:openapi_generate_typescript_fetch
+```
+
+The package-dir will have a TypeScript NPM package sources including test files. The config points to files with `package_cfg` as name prefix.
 
 ## To Do
 
+- Add oneOf, anyOf, allOf support.
 - Large API document generated with multiple possible combinations for each thing.
 - Small example API and code.
 - Naming things could have something that can deal with collisions.
