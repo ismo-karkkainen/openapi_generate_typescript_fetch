@@ -195,8 +195,7 @@ EOB
     kreq = []
     os.props.select { |p| !p.pattern && !p.additional }.each do |p|
       ps = Gen.h.dereference(p.spec)
-      # oneOf support requires that preq/popt item can be an array of hashes.
-      warn("Property '#{p.name}' type '#{p.type}' has nil schema, fully proicessed source?") if ps.nil?
+      warn("Property '#{p.name}' type '#{p.type}' has nil schema, fully processed source?") if ps.nil?
       o.push("#{p.name}#{p.req ? '' : '?'}: #{p.type};")
       (p.req ? preq : popt).push({
         name: p.name,

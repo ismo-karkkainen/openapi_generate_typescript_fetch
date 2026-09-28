@@ -70,16 +70,16 @@ sis.each do |si|
     end
     if props.empty? && pat_props.empty? && (add_props.nil? || add_props == false)
       make_name(si.schema, :pass, si.name)
-      out.push("export function #{si.schema[:pass].last}(): #{si.name} { return {} as #{si.name}; }")
+      out.push("export function #{si.schema[:pass].last}(): #{si.name} { return {} as unknown as #{si.name}; }")
       if add_props == false
         make_name(si.schema, :fail, si.name)
-        out.push("export function #{si.schema[:fail].last}(): #{si.name} { return { prop: 'invalid' } as #{si.name}; }")
+        out.push("export function #{si.schema[:fail].last}(): #{si.name} { return { prop: 'invalid' } as unknown as #{si.name}; }")
       end
       next
     end
     unless si.schema.fetch('required', []).empty?
       make_name(si.schema, :fail, si.name)
-      out.push("export function #{si.schema[:fail].last}(): #{si.name} { return {} as #{si.name}; }")
+      out.push("export function #{si.schema[:fail].last}(): #{si.name} { return {} as unknown as #{si.name}; }")
     end
     todo.push(si)
   when 'array'
@@ -122,7 +122,7 @@ sis.each do |si|
     # Handle size-based fails. Any type is ok as length is not within limits.
     if min_items > 1
       make_name(si.schema, :fail, si.name)
-      out.push("export function #{si.schema[:fail].last}(): #{si.name} { const a = []; a[#{min_items - 2}] = 1; return a as #{si.name}; }")
+      out.push("export function #{si.schema[:fail].last}(): #{si.name} { const a = []; a[#{min_items - 2}] = 1; return a as unknown as #{si.name}; }")
     elsif min_items == 1
       make_name(si.schema, :fail, si.name)
       out.push("export function #{si.schema[:fail].last}(): #{si.name} { return [] as #{si.name}; }")
@@ -132,7 +132,7 @@ sis.each do |si|
     end
     unless max_items.nil?
       make_name(si.schema, :fail, si.name)
-      out.push("export function #{si.schema[:fail].last}(): #{si.name} { const a = []; a[#{max_items}] = 0; return a as #{si.name}; }")
+      out.push("export function #{si.schema[:fail].last}(): #{si.name} { const a = []; a[#{max_items}] = 0; return a as unknown as #{si.name}; }")
     end
     todo.push(si)
   when 'string'
@@ -670,11 +670,11 @@ EOB
             if idx < pp.size
               m = other_type([ alts[:prefix][idx], alts[:contains] ].compact)
               make_name(si.schema, :fail, si.name)
-              out.push("export function #{si.schema[:fail].last}(): #{si.name} { return replace(#{ma}, #{idx}, #{m}) as #{si.name}; }")
+              out.push("export function #{si.schema[:fail].last}(): #{si.name} { return replace(#{ma}, #{idx}, #{m}) as unknown as #{si.name}; }")
             else
               m = other_type([ alts[:items], alts[:contains] ].compact)
               make_name(si.schema, :fail, si.name)
-              out.push("export function #{si.schema[:fail].last}(): #{si.name} { return replace(#{ma}, #{idx}, #{m}) as #{si.name}; }")
+              out.push("export function #{si.schema[:fail].last}(): #{si.name} { return replace(#{ma}, #{idx}, #{m}) as unknown as #{si.name}; }")
             end
           end
         end
@@ -685,7 +685,7 @@ EOB
             len = max_contains + 1
             ma = "makeContainingArray(#{min_items}, #{pp}, null, #{alts[:contains][:pass].first}, #{alts[:contains][:is]}, #{len}, #{len})"
             make_name(si.schema, :fail, si.name)
-            out.push("export function #{si.schema[:fail].last}(): #{si.name} { return #{ma} as #{si.name}; }")
+            out.push("export function #{si.schema[:fail].last}(): #{si.name} { return #{ma} as unknown as #{si.name}; }")
             # Exactly max_contains pass, minContains == maxContains == max_contains
             len = max_contains
             ma = "makeContainingArray(#{min_items}, #{pp}, null, #{alts[:contains][:pass].first}, #{alts[:contains][:is]}, #{len}, #{len})"
@@ -700,7 +700,7 @@ EOB
               len = min_contains - 1
               ma = "makeContainingArray(#{min_items}, #{pp}, #{ip}, #{alts[:contains][:pass].first}, #{alts[:contains][:is]}, #{len}, #{len})"
               make_name(si.schema, :fail, si.name)
-              out.push("export function #{si.schema[:fail].last}(): #{si.name} { return #{ma} as #{si.name}; }")
+              out.push("export function #{si.schema[:fail].last}(): #{si.name} { return #{ma} as unknown as #{si.name}; }")
             end
             if min_items <= min_contains + certain_mismatch
               # Min contains pass, minContains == maxContains == min_contains

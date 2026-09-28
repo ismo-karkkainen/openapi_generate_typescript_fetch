@@ -50,13 +50,18 @@ Key `copyright` is for a copyright text block that is included in the generated 
 
 Under `tests` is expected to be the output of openapi-patterntests with needed manual changes.
 
-An example configuration with target, added script for package.json, and test strings for a string pattern. 
+An example configuration with target, added script for package.json, and test strings for a string pattern.
 
 ```yaml
 target: 'browser'
 package:
+  name: '@scope/name'
+  version: '1.2.3'
   scripts:
     coverage: "tsc && NODE_V8_COVERAGE=coverage mocha pkg/test"
+copyright: |-
+  Whatever your files are supposed to have...
+  Can have multiple lines.
 tests:
   patterns:
   - pattern: "^.+$"
@@ -81,11 +86,19 @@ To run the actual generation using this gem, run:
 openapi-generate --input generation_source_document.yaml --outdir package-dir config:package_cfg req:openapi_generate_typescript_fetch
 ```
 
-The package-dir will have a TypeScript NPM package sources including test files. The config points to files with `package_cfg` as name prefix.
+The package-dir will have a TypeScript NPM package sources including test files. The config points to files with `package_cfg` as name prefix. Even if you have one file, use just path and file base name.
+
+## oneOf, allOf, anyOf, and so on
+
+In short, if I determine the type of a property in schema, that allows one of many or a combination, the type either is stored somewhere or code using the instance will keep checking again and again. My intention is to have type declarations for the schemas. The JSON schema oneOf/anyOf/not/if-then-else and so on can combine to something that has properties but leaves the user figuring out what it is.
+
+A different implementation no doubt can handle it all, taking a different point of view rather than one from strongly typed language background. For now this will stick to being what it is. An approach starting from validation and figuring what is left for properties etc. to contain might work. I might try that some day.
+
+The allOf is technically, if one thinks of it as on the fly generation of a schema by combining multiple others, representable as a single schema. That is not the intention according to [specification](https://spec.openapis.org/oas/latest.html#composition-and-inheritance-polymorphism): array of object definitions that are validated independently but together compose a single object. I'm sure I've ignored a few things along the way so should not be too concerned by that.
 
 ## To Do
 
-- Add oneOf, anyOf, allOf support.
+- Rework the type handling to use ajv to verify and output relatively accurate types, trusting ajv to do the length etc. checks.
 - Large API document generated with multiple possible combinations for each thing.
 - Small example API and code.
 - Naming things could have something that can deal with collisions.

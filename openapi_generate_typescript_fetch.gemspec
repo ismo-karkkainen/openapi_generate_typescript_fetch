@@ -25,6 +25,6 @@ Produces a Fetch API client in TypeScript wrapped into a NPM package.'
   s.required_ruby_version = '>= 3.2.0'
   s.metadata = { 'rubygems_mfa_required' => 'true' }
   s.add_dependency 'lucky_case', '~> 1.1', '>= 1.1.0'
-  s.add_dependency 'openapi-arrangement', '~> 0.1.0'
-  s.add_dependency 'openapi-sourcetools', '~> 0.10.0'
+  s.add_dependency 'openapi-arrangement', '~> 0', '>= 0.1.0'
+  s.add_dependency 'openapi-sourcetools', '~> 0', '>= 0.12.1'
 end
