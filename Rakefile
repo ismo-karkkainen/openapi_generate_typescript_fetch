@@ -2,32 +2,30 @@
 
 require 'rubocop/rake_task'
 
-def ogtf
-  'openapi_generate_typescript_fetch'
-end
+OGTF = 'openapi_generate_typescript_fetch'
 
 task default: [:install]
 
 desc 'Clean.'
 task :clean do
-  sh "rm -f #{ogtf}-*.gem"
+  sh "rm -f #{OGTF}-*.gem"
 end
 
 desc 'Build gem.'
 task gem: [:clean] do
-  sh "gem build #{ogtf}.gemspec"
+  sh "gem build #{OGTF}.gemspec"
 end
 
 desc 'Build and install gem.'
 task install: [:gem] do
-  sh "gem install #{ogtf}-*.gem"
+  sh "gem install #{OGTF}-*.gem"
 end
 
 desc 'Uninstall gem.'
 task :uninstall do
-  sh "gem uninstall --executables #{ogtf}"
+  sh "gem uninstall --executables #{OGTF}"
 end
 
 RuboCop::RakeTask.new(:lint) do |t|
-  t.patterns = [ 'lib', "#{ogtf}.gemspec" ]
+  t.patterns = [ 'lib', "#{OGTF}.gemspec" ]
 end

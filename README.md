@@ -88,21 +88,63 @@ openapi-generate --input generation_source_document.yaml --outdir package-dir co
 
 The package-dir will have a TypeScript NPM package sources including test files. The config points to files with `package_cfg` as name prefix. Even if you have one file, use just path and file base name.
 
+## Code Example
+
+A straightforward way is to set shared parameters for things that every request uses. Then pass all arguments and body to operation class constructor, followed by call with arguments passed through to response class obtain method, which returns response class instance.
+
+```TypeScript
+import {shared, OpFoo, OpFooResponse} from 'package-name';
+
+// Set server and authorization header for all request made via the package.
+shared.serverUrl = 'https://example.com';
+shared.extras.headers = {
+  authorization: `Bearer ${token}`
+};
+
+try {
+  const response: OpFooResponse = await (new OpFoo({ arg, body })).call({ throwNon2xx: true });
+  console.log(response.c200?.body)
+} catch (error) {
+  console.error(error.toString(), error.body?)
+}
+```
+
+In case you need to make modifications, you can do things step by step.
+
+```TypeScript
+const caller: OpFoo = new OpFoo();
+// Set params, body, headers, extra arguments, modify function as you need to.
+caller.prepare(); // Lets you set AbortSignal and ignore argument mismatches.
+// You can further modify caller.urlRequestInit. Body has been encoded.
+const response: OpFooResponse = await OpFooResponse.obtain({ caller });
+if (response.mismatch != 0) {
+  // 1 is content-type, 2 is body content. If you want exception thrown, it has raw body.
+} else {
+  // The cNNN have body and other values that were returned. If code matches.
+  const good = response.c200?.body || response.c201?.body; // If multiple status codes.
+  // cNNN is available for codes from API document, cOther covers everything else.
+
+  // Another alternative:
+  const alt = response.body;
+  if (response.c200 || response c201) { /* Do what needed when succeeded. */ }
+  else {
+    console.error(response.response.statusCode, alt);
+  }
+}
+```
+
+In case you are wondering, the code places path and query parameters to their places, so you do not have to pay attention. The OpFoo comes from the operationId set in the API document.
+
 ## oneOf, allOf, anyOf, and so on
 
-In short, if I determine the type of a property in schema, that allows one of many or a combination, the type either is stored somewhere or code using the instance will keep checking again and again. My intention is to have type declarations for the schemas. The JSON schema oneOf/anyOf/not/if-then-else and so on can combine to something that has properties but leaves the user figuring out what it is.
-
-A different implementation no doubt can handle it all, taking a different point of view rather than one from strongly typed language background. For now this will stick to being what it is. An approach starting from validation and figuring what is left for properties etc. to contain might work. I might try that some day.
-
-The allOf is technically, if one thinks of it as on the fly generation of a schema by combining multiple others, representable as a single schema. That is not the intention according to [specification](https://spec.openapis.org/oas/latest.html#composition-and-inheritance-polymorphism): array of object definitions that are validated independently but together compose a single object. I'm sure I've ignored a few things along the way so should not be too concerned by that.
+In short, not handled as of now. My intention is to have type declarations for the schemas. The JSON schema oneOf/anyOf/not/if-then-else and so on can combine to something that has properties but leaves the user figuring out what it is.
 
 ## To Do
 
-- Rework the type handling to use ajv to verify and output relatively accurate types, trusting ajv to do the length etc. checks.
-- Large API document generated with multiple possible combinations for each thing.
+- Rework the type handling to use ajv to verify and output relatively accurate types, trusting ajv to do the length etc. checks?
 - Small example API and code.
 - Naming things could have something that can deal with collisions.
-- Testing with mock server? https://github.com/nock/nock ?
+- Testing with mock server? [nock](https://github.com/nock/nock)?
 
 ## License
 

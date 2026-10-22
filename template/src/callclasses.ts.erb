@@ -236,7 +236,7 @@ EOB
     end
     query_params = ps.select { |p| p['in'] == 'query' }
     query_func = query_params.map { |qp|
-      "if (cand.#{qp[:name]} !== undefined) q.push(`#{URI.encode_uri_component(qp['name'])})=${encodeURIComponent(cand.#{qp[:name]})}`);"
+      "if (cand.#{qp[:name]} !== undefined) q.push(`#{URI.encode_uri_component(qp['name'])}=${encodeURIComponent(cand.#{qp[:name]})}`);"
     }.join("\n")
     header_params = ps.select { |p| p['in'] == 'header' }
     header_func = header_params.map { |hp|
@@ -439,6 +439,8 @@ export class #{clsName} {
 
     #{encode}
     prepare({ ignoreMismatches = false, createAbortSignal = false }: PrepareArgs = {}): UrlRequestInit {
+        if (this.urlRequestInit !== undefined)
+            return this.urlRequestInit;
         const cand = #{paramless ? '{}' : "{ ...#{operation_object[:shared]}(), ...#{clsName}.params, ...this.params! }"};
         #{paramless ? '// cand is ok.' : "
         if (!#{operation_object[:args_is]}(cand) && !ignoreMismatches) {
@@ -462,9 +464,11 @@ export class #{clsName} {
         return out;
     }
 
-    async call(): Promise<#{clsRespName}> {
-        const ur = this.urlRequestInit || this.prepare();
-        return #{clsRespName}.obtain({ caller: this });
+    // args gets passed through to #{clsRespName}.obtain.
+    async call(args: Partial<#{clsRespName}Args> = {}): Promise<#{clsRespName}> {
+        if (this.urlRequestInit === undefined)
+            this.prepare();
+        return #{clsRespName}.obtain({ caller: this, ...args });
     }
 }
 
@@ -500,6 +504,7 @@ export class #{clsRespName} {
 
     static async obtain(args: #{clsRespName}Args): Promise<#{clsRespName}> {
         if (args.response === undefined) {
+            args.caller.prepare();
             args.response = await fetch(args.caller.urlRequestInit!.url, args.caller.urlRequestInit!.ri);
         }
         args = { loaders: #{clsRespName}.loaders, ...#{clsRespName}.args, ...args };

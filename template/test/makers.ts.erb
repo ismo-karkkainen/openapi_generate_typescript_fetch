@@ -751,7 +751,9 @@ Gen.doc['paths'].each do |path, path_item_object|
     end
     paraschemas = operation_object[:paraschemas]
     commons = {}
-    [ :pass, :fail, :typefail, 'missing' ].each do |kind|
+    categories = [ :pass, :fail, :typefail ]
+    categories.push('missing') unless paraschemas.index { |ps| ps[:param]['required'] }.nil?
+    categories.each do |kind|
       paraschemas.size.times do |chosen|
         param_makers = []
         category = kind
@@ -768,6 +770,8 @@ Gen.doc['paths'].each do |path, path_item_object|
                 needed = :fail unless schema[:fail].empty?
                 category = needed
               else
+                needed = :pass # Optional missing is not a problem.
+                category = needed
                 param_makers.push(nil)
                 next
               end
